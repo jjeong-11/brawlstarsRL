@@ -1,0 +1,490 @@
+# Brawl Stars RL Bot
+
+A reinforcement-learning bot that plays Brawl Stars **Solo Showdown** by reading
+the screen and choosing what to do.
+
+## This bot is NOT intended to be a CHEAT or HACK
+
+Unlike Brawl Stars Cheats, Brawl Stars RL Bot does NOT 
+modify the game, read its memory, intercept network traffic, or reveal hidden
+information. It observes only the pixels displayed on the screen, just as a human
+player does, and sends standard movement and attack inputs through the 
+operating system. The reinforcement learning policy decides actions from visual 
+observations RATHER THAN following hardcoded if-then scripts like popular 
+hacks/cheats used in ranked. The bot has no access to information 
+unavailible to human players. It cannot see enemies in bushes, predict 
+future events, or obtain exact game-state values from memory. All 
+information is extracted from in-game pixels using computer vision, making 
+its observations imperfect and sometimes inaccurate. 
+
+In fact, the system operates at a disadvantage compared to human players. 
+The reinforcement learning pipeline currently processes observations at 
+approximately 10 frames per second introducing aprroximately hundred milliseconds of 
+latency between observing the game and responding. Humans percieve and react
+to visual updates occurring at 60-120 frames per second, giving them substantially 
+faster reaction times. 
+
+Although this project automates gameplay, I do NOT promote or encourage botting 
+on team-gamemodes or using bots to push the Ranked Gamemode. The purpose
+of this project is to explore reinforcement learning, computer vision, and 
+autonomous decision making in a real-time game environment. It is intended as a research 
+and educational project rather than a competitive tool. 
+
+
+
+## Folder layout
+
+```
+projectv2/
+├── perception/          Computer-vision stack: read the screen -> game facts
+│   ├── getAnchor.py         player position (green floor ring)
+│   ├── getHealth.py         HP        getAmmo.py    ammo
+│   ├── getCube.py           cube count (HUD)   getPickups.py  ground cubes
+│   ├── getEnemies.py        enemies + boxes (uses username_classifier)
+│   ├── getGas.py            is the player standing in the gas zone
+│   ├── getSuper.py          super-charge level from the skull button (0..1)
+│   ├── getTerrain.py        floor/wall/bush -> walkability grid for pathfinding
+│   ├── getGameState.py      match_end / loading / in_match + brawlers-left + rank
+│   ├── digitReader.py       fast template digit OCR (+ digit_*.npz data)
+│   ├── username_classifier.py  (+ username_classifier_weights.json)
+│   ├── callTools.py         one-frame debug harness
+│   └── liveLoop.py          LivePerception: runs the whole stack per tick,
+│                            smooths noise, and emits one "live state" dict
+├── rl/                  Reinforcement-learning layer  (NEW)
+│   ├── state.py             GameState + adapt_live_state(live dict -> GameState)
+│   ├── rewards.py           RewardConfig + RewardCalculator  ← the learning signal
+│   ├── kills.py             KillAttributor (credits the agent's knockouts)
+│   ├── actions.py           action space + ActionExecutor (Logging / ADB phone)
+│   ├── camera_tracker.py    frame-to-frame world scroll (keeps waypoints still)
+│   ├── path_planner.py      latched destination + A* over the terrain grid
+│   ├── env.py               BrawlStarsEnv (Gymnasium) — glues everything
+│   └── train.py             Stable-Baselines3 PPO
+├── scripts/             Entry points you actually run
+│   ├── run_live.py          perception-only status loop
+│   ├── run_prototype.py     perception -> reward loop on real footage  ← the prototype
+│   ├── train_rl.py          PPO training
+│   ├── test_rewards.py      reward-engine unit tests
+│   ├── test_waypoint.py     planner tests in a synthetic scrolling world
+│   └── check_perception.py  PRE-FLIGHT: per-stage perception health check
+├── tools/               Offline utilities (harvest templates, classifier, calibrate_map.py)
+├── media/               testphotos/ testvideos/ crops/ gasphotos/ (labelled gas fixtures)
+├── training_data/       username-classifier dataset
+├── debugOutput/         annotated frames written at runtime
+├── requirements.txt     README.md      LICENSE
+```
+
+Everything the bot imports lives in the `perception/` and `rl/` packages; the
+`scripts/` are thin launchers that put the repo root on the path so those
+packages resolve no matter where you run them from.
+
+## How it all connects
+
+One game tick flows top to bottom:
+
+```
+   screen frame
+      │
+   perception/liveLoop.py  ── LivePerception.tick(frame) ──►  live state dict
+      │        (anchor, hp, ammo, hud_cubes, enemies, boxes, cubes,
+      │         in_gas, game_state{state, brawlers_left, rank})
+      ▼
+   rl/state.py  ── adapt_live_state(live) ──►  GameState   (one typed snapshot)
+      │
+      ├──►  rl/rewards.py   RewardCalculator.compute(prev → curr)  ──►  reward (+breakdown)
+      └──►  rl/env.py       encode_observation(state)              ──►  obs vector
+      │
+   rl/env.py   BrawlStarsEnv.step(action) returns (obs, reward, terminated, truncated, info)
+      │
+   rl/train.py  Stable-Baselines3 PPO maximizes the reward, and emits the next action
+      │
+   rl/actions.py  ActionExecutor turns that action into taps/swipes  ──►  the game
+      ▲                                                                      │
+      └──────────────────────────  next frame  ◄─────────────────────────────┘
+```
+
+The **reward engine is the hub**: perception feeds it (through `GameState`), the
+env calls it every step, PPO consumes its output, and the resulting action changes
+the next frame. Because `env.py` takes an injected frame *source* and *executor*,
+the same loop runs offline on a recorded match (`VideoSource` + `LoggingExecutor`)
+or live (`ScreenSource` + `AdbExecutor`) with no code changes.
+
+## The reward function (rl/rewards.py)
+
+| Signal | Term | Default | Where the data comes from |
+|---|---|---|---|
+| Collect powercube | `+1.0` per cube | `cube_pickup` | `hud_cubes` (getCube) |
+| Charge super (rises only on damage) | `+4.0 × Δ` | `super_charge_full` | `super_charge` (getSuper) |
+| Knock out an enemy | `+5.0` | `kill` | `kills_this_tick` (rl/kills.py) |
+| Survive a tick, zone-safe | `+0.09` | `survive_tick` | `is_alive` + `in_gas` |
+| Improve placement | `+3.0` per player | `placement` | `brawlers_left` (getGameState) |
+| Win the match | `+50.0` terminal | `win` | `rank == 1` (getGameState) |
+| Move toward a box | `γΦ(s′) − Φ(s)` | `box_progress` | `boxes` (getEnemies) |
+| Regain health | `+3.0 × (HP gained/bar)` | `health_regain` | `hp` (getHealth) |
+| Take damage | `−3.0 × (HP lost/bar)` | `damage_taken` | `hp` (getHealth) |
+| Fire attack / super | `−0.05` / `−0.10` per tap | `attack_cost` | the gated action |
+| Die | `−30.0` terminal | `death` | `rank ≥ 2` |
+| Stand in gas | `−0.5` per tick | `gas_tick` | `in_gas` (getGas) |
+
+### Trigger discipline and healing
+
+There were two behaviours the first version got badly wrong, both measured on a rollout:
+
+| | before | after |
+|---------
+| attacks fired with an empty clip | 89% | **0%** |
+| supers fired uncharged | 100% | **0%** |
+| reward earned for regaining HP | +0.000 | pays `health_regain` |
+
+**Firing was free and super was ungated**, so nothing discouraged holding the
+trigger down. `env._gate_weapons` now blocks shots that provably cannot do
+anything — no visible target, confirmed-empty clip, uncharged super — which
+costs no samples to learn, and `attack_cost` handles the shots that are merely
+*unlikely* to land. The cost is deliberately well under the value of a hit
+(~+0.4 through `super_charge`), so the agent trims spray-and-pray without
+becoming gun-shy.
+
+**Healing was worth exactly zero.** Brawl Stars regenerates HP only when out of combat, so
+healing is not an action — it is the result of disengaging. The engine only
+looked at HP *losses*, so retreating had no upside while fighting always paid off
+super charge and kills (unless it died :skull). `health_regain` is set **equal to** `damage_taken`, which
+makes health a potential: a damage-then-heal cycle nets zero, so the agent
+cannot farm it by getting hurt on purpose.
+
+**The ammo gate is `ammo_known`-guarded for a reason.** `find_ammo_info`
+returns `0` both for "empty clip" and "could not find the bar", and on real
+footage it only reads successfully on **~8% of frames** (it needs the health bar
+located first, and that path has since been improved to ~48%). Gating on the raw
+count would block nearly every attack the
+agent ever attempts. Super has no such problem — its ROI is a fixed HUD position
+that is never occluded, so `0.0` there genuinely means uncharged.
+
+### Why `box_progress` is potential-based
+
+`cube_pickup` only pays at the moment of contact, which is very sparse to find by
+random walking, so `box_progress` adds a dense gradient toward boxes. The obvious
+implementation — "reward getting closer" — is farmable: step toward a box, step
+back, repeat forever. So the term is instead
+`F = γΦ(s′) − Φ(s)` with `Φ = β(1 − normalised distance to nearest box)`, which
+[Ng, Harada & Russell (1999)](https://people.eecs.berkeley.edu/~russell/papers/ml99-shaping.pdf)
+proves cannot change the optimal policy, and which telescopes around any closed
+loop so oscillating earns nothing. Measured: 30 steps of oscillating scores
+**−0.08**, 30 steps of real progress scores **+0.14**.
+
+Three details that are easy to get wrong and are handled explicitly:
+
+- **Picking a box up deletes it**, collapsing Φ on the exact tick you succeed —
+  which would be a large penalty for doing the right thing. Shaping is suppressed
+  on any tick where `cube_pickup` fires.
+- **A jump in nearest-box distance means the box changed identity** (occluded,
+  collected, newly detected), not that the player moved. Those ticks are skipped.
+- **`RewardConfig.gamma` must match PPO's `gamma`** in `train.py`. Policy
+  invariance only holds when they agree.
+
+### Gas is handled in the planner, not the reward
+
+There is deliberately no "moved toward gas" penalty. Gas is a **cost layer in the
+A\* grid** (`getGas.gas_info(grid_rect=...)` → `terrain["gas"]`), so the agent
+routes around the cloud from the very first frame at zero sample cost, instead of
+spending tens of thousands of steps learning it from a reward. Destinations that
+land in gas are relocated at latch time.
+
+Crucially it is a *cost*, not a wall: sometimes the safe zone is only reachable
+through the cloud, and an agent taught "never enter gas" would corner itself and
+die in exactly the endgame where that is fatal. A\* takes the detour when one
+exists and crosses when one does not.
+
+**Gas vs foliage is the trap in this whole subsystem.** Gas is a pale-green
+puffy overlay; several maps have green bushes at the same hue. Measured across
+four themes:
+
+| | H | S | V |
+|---|---|---|---|
+| gas | 49–56 | **97–105** | **211–222** |
+| bush | 48–100 | **166–255** | **47–233** |
+
+Saturation and value separate them; hue does not. Getting this wrong is
+invisible without ground truth — it cost this project two bugs (the gas band's
+old `S ≤ 200` cap admitted bushes, and `purple_stone`'s bush class was
+calibrated on gas puffs). `media/gasphotos/` holds five labelled fixtures, and
+`scripts/test_waypoint.py` asserts both that they classify correctly and that no
+profile's bush box overlaps the gas box in all three channels.
+
+Design points: terminals dominate so the agent chases the real objective; the
+survival reward is tiny and unpaid in gas so hiding never wins; damage is scaled
+to a fraction of the health bar so it means the same across brawlers; and every
+noisy reading is sanitized (None carried forward, impossible jumps rejected) as a
+second safety net on top of liveLoop's smoothing. `compute()` returns a labeled
+breakdown so you can see exactly which term drives learning.
+
+## Actions & control
+
+The policy picks a **destination**, not a direction. The space is
+`MultiDiscrete([16, 3, 2, 2])` = 16 headings × 3 commit distances × attack × super.
+There's no aiming: attack and super are plain taps and Brawl Stars auto-targets the
+nearest enemy, and they can co-fire with movement on one tick (kiting).
+
+The three layers underneath:
+
+| module | job |
+| --- | --- |
+| `perception/getTerrain.py` | segments floor / wall / bush → a 48×27 walkability grid (~0.8 ms) |
+| `rl/camera_tracker.py` | phase-correlates consecutive frames → how far the world scrolled |
+| `rl/path_planner.py` | **latches** the destination in world space and A*s to it |
+
+Latching is the point. The camera follows the player, so a destination stored in
+screen pixels retreats at exactly the player's walking speed and is never reached —
+which makes a "waypoint" policy just a compass with 225 actions instead of 9. The
+camera delta lets the planner hold one destination still while the agent walks
+there over 8–26 decisions, so each action is a committed macro-move rather than a
+twitch. While a commitment is live the movement heads are **ignored**; the
+observation exposes `waypoint_active` / `progress` so the policy can tell which
+steps its movement choice actually mattered on. Commitments break early on arrival,
+timeout, a blocked route, gas, or an **enemy or box** first appearing.
+
+The box interrupt matters more than it looks. Committing is the point of this
+planner, but it costs something the old 8-direction policy didn't pay: the agent
+can't react to what it only notices mid-commitment. Boxes appear as the camera
+scrolls, and without an interrupt the agent walks straight past one for up to 26
+decisions (~2.5s) — which visibly suppressed cube collecting. Interrupts fire on
+the *transition* into view only, so commitments still hold while a box stays on
+screen.
+
+`AdbExecutor` then drives a **physical Android phone** (e.g. a Pixel 10) over `adb`:
+movement = a held joystick drag, attack/super = taps. `rl/env.make_phone_env()` wires
+capture (`adb screencap`) + control together. See
+**[docs/ANDROID_CONTROL.md](docs/ANDROID_CONTROL.md)** for connecting the phone,
+calibrating button coordinates, and the faster scrcpy path.
+
+Run `python scripts/test_waypoint.py` to exercise the planner in a synthetic
+scrolling world (arrival, wall routing, gas override, and a regression guard against
+the un-latched behaviour).
+
+### Checkpoints are not interchangeable
+
+| directory | design | obs |
+| --- | --- | --- |
+| `checkpoints/` | v3, `MultiDiscrete([9, 2, 2])` 8-way | 46 |
+| `checkpoints_waypoint/` | 15×15 grid waypoints | 46 |
+| `checkpoints_polar/` | current, `MultiDiscrete([16, 3, 2, 2])` | 60 |
+
+Both the action head and the input layer changed shape, so weights cannot transfer.
+`train.py` writes each design to its own path and refuses a mismatched resume.
+
+## What still needs building
+
+The whole reward list now runs on real perception — including **super charge**
+(`getSuper.py`) and **kill attribution** (`rl/kills.py`). What's left (declared in
+`rl/state.MISSING_EXTRACTORS`):
+
+- **mid-match death** — `getGameState` can't yet see the death/spectate screen
+  (both recorded matches were wins), so `is_alive` is inferred from the final rank.
+  Record a losing match to add that state.
+- **kill banner (optional)** — reading the on-screen defeat banner would give exact
+  kill attribution; `rl/kills.py` already provides a solid heuristic without it.
+
+The control layer (`actions.AdbExecutor`) is functional over `adb` — you just
+calibrate the button coordinates for your Pixel (see the Android doc).
+
+## Running it
+
+```bash
+pip install -r requirements.txt        # + system tesseract for OCR
+
+# watch the reward function run on a recorded match (the working prototype):
+python scripts/run_prototype.py --video media/testvideos/test_game3.mp4 --start 12
+
+# perception-only status loop:
+python scripts/run_live.py --video media/testvideos/test_game1.mp4
+
+# reward-engine unit tests (no cv2/gym needed):
+python scripts/test_rewards.py
+
+# planner tests: latching, A* around walls, gas cost, reward-shaping exploits
+python scripts/test_waypoint.py
+
+# train PPO offline on a recording (plumbing / reward check):
+python scripts/train_rl.py
+```
+
+### Finding out why the loop is slow
+
+```bash
+python scripts/train_rl.py --live --serial <SERIAL> --controls controls.json --profile 200
+```
+
+```
+[env profile] 200 steps |   3.0 fps |  333.0 ms/step
+    act (adb touch)            1.9 ms     1%
+    pace (idle wait)           0.0 ms     0%
+    capture (grab)           300.0 ms    90%     <- transport bound
+    perceive                  25.0 ms     8%
+    terrain+gas+camera         3.3 ms     1%
+```
+
+Whichever row dominates is the only one worth optimising, and **it is not
+guessable from an offline benchmark**: offline the frames come from memory, so
+capture costs nothing and compute looks like the whole story. On a phone
+`adb screencap` is typically 150–400 ms and everything else is noise.
+
+| dominant row | what to do |
+|---|---|
+| `act` | swipes are queueing — see below. Use `--sendevent`, which holds the touch instead of re-swiping |
+| `pace` | the loop is idle-waiting, so lower `--tick-seconds` |
+| `perceive` | raise the intervals in `liveLoop.STAGE_INTERVALS` |
+| `capture` | change transport — `--scrcpy` is the only flag that swaps the capture source |
+
+### The `hold_ms` trap
+
+`input swipe x0 y0 x1 y1 <hold_ms>` **blocks the device shell for hold_ms**, so
+issuing one per tick caps the loop at `1000/hold_ms` fps regardless of what you
+ask for. The old 200 ms default capped it at **5 fps**.
+
+The failure is deceptive, which is why it went unnoticed: commands go down a
+persistent `adb shell` pipe, so a backlog first fills the 64 KB stdin buffer at
+no measurable cost and only blocks once full. Measured on a real phone:
+
+| tick | oversubscription | profiled `act` |
+|---|---|---|
+| 0.10 s | 2× | 1.1 ms — *looks fine, latency growing invisibly* |
+| 0.05 s | 4× | **329 ms (84% of the step)** |
+
+Halving the tick made the loop **slower**. And the hidden latency matters more
+than the throughput: a growing backlog means the game runs an action many steps
+after the policy picked it, so the reward is attributed to the wrong action.
+
+`Controls.tuned_for_tick()` now clamps `hold_ms` to the tick budget
+automatically and prints a note when it does, so swipes tile at a ~100% duty
+cycle instead of queueing. **`--sendevent` avoids the problem entirely** — it
+presses the joystick once and only MOVEs it to redirect, so movement costs
+nothing per step and is genuinely continuous rather than re-swiped.
+
+`--tick-seconds` is a **deadline, not a delay**: `_pace()` waits until the next
+tick is due rather than sleeping a fixed amount on top of the work, so the
+measured rate matches the requested one.
+
+**Read `pace` first.** A measured phone profile came out at 98.8 ms/step with
+71.3 ms (72%) of it idle — the loop was doing 27.5 ms of real work and waiting
+out the rest of a 0.1 s tick. That headroom is free throughput:
+
+| `--tick-seconds` | ms/step | fps | idle headroom |
+|---|---|---|---|
+| 0.10 (default) | 100 | 10.0 | 72% |
+| 0.05 | 50 | 20.0 | 45% |
+| 0.04 | 40 | 25.0 | 31% |
+
+Hard ceiling is ~36 fps at 27.5 ms of work. Lowering the tick is safe:
+`_planner_config_for()` rescales `commit_ticks` and `stuck_ticks` so
+commitments stay fixed in **seconds** rather than decisions — at 0.05 s they
+become `(16, 32, 52)`, still 0.8–2.6 s. Without that, halving the tick would
+silently halve every commitment and undo the temporal abstraction while the
+loop merely *looked* twice as productive.
+
+**If SB3 reports far less than the in-match rate**, the difference is between
+matches: end-of-match animations, menu navigation and matchmaking all happen
+inside `reset()`, and SB3 charges that wall clock against every step. The
+profile prints it as a separate line.
+
+### Run this before every training session
+
+```bash
+python scripts/check_perception.py --serial <SERIAL>      # or --video clip.mp4
+```
+
+Every expensive mistake in this project has been a silent perception failure
+that looked like a hard RL problem: terrain constants that fit one map and made
+86% of another read as solid wall; a gas band that fired on bushes; an anchor
+that locked onto crates so every HUD window searched the wrong place. None of
+them raise an error — they surface as a flat training curve two days later.
+
+`check_perception.py` puts a number on each stage and flags the low ones:
+
+```
+stage                         rate   status
+terrain profile matched       100%   OK
+anchor verified                49%   OK
+HP read                        76%   OK
+ammo read                      54%   OK
+```
+
+### Check the terrain segmentor on YOUR map first
+
+Showdown rotates map skins with completely different palettes, and one set of
+HSV bounds does not survive that. `getTerrain.py` ships five measured profiles
+(`night_teal`, `purple_stone`, `magenta_crate`, `graveyard`, `starr_rail`) and
+picks the best-scoring one per match. **A map matching none of them is the single most damaging failure
+mode in this codebase** — before profiles existed, applying the wrong bounds
+classified 1.2% of the frame, and since unrecognised pixels count as obstacles
+that made 86% of the map "solid". The agent then walks into borders, because
+A\* is routing around walls that do not exist.
+
+```bash
+python -m perception.getTerrain path/to/your_screenshot.png
+# prints each profile's coverage and which one won
+# writes debugOutput/terrain_debug.png — walls RED, bushes GREEN, floor BLUE,
+# blocked planning cells outlined in white
+```
+
+Healthy numbers: **coverage 45-75%**, **blocked 30-50%**. If it says
+`NO PROFILE MATCHED`, add your map — the calibrator does it by clustering, so
+you never have to guess pixel coordinates:
+
+```bash
+python tools/calibrate_map.py your_screenshot.png --name my_map
+# prints a ready-to-paste TerrainProfile; add it to PROFILES
+python tools/calibrate_map.py shot.png --montage /tmp/m.png   # eyeball the clusters
+```
+
+Prefer clustering over hand-labelled patches. Mislabelling one patch silently
+poisons a profile, and that already happened here once: `purple_stone`'s bush
+class was calibrated on what turned out to be gas.
+
+Two independent guards mean a bad profile degrades instead of lying:
+
+- `MIN_PROFILE_COVERAGE` — no profile explains ≥30% of the frame → no grid.
+- `MAX_BLOCKED_FRACTION` — the grid comes out >72% solid → no grid. This catches
+  the case where the *sticky* profile choice survives a frame it no longer fits
+  (a full-screen super, a death overlay, a heavy gas tint).
+
+In both cases `find_terrain` returns `None`, and the planner falls back to
+direct steering — which is far better than pathfinding over an imaginary maze.
+
+### On the phone (Pixel 10)
+
+```bash
+# 1) copy the controls template and fill in YOUR button pixel coords:
+cp controls.example.json controls.json     # then edit (see docs/ANDROID_CONTROL.md)
+
+# 2) verify perception + calibration live BEFORE training (sends no actions):
+python scripts/watch_live.py --serial <SERIAL> --save-preview
+python scripts/watch_live.py --serial <SERIAL> --calibrate --controls controls.json
+
+# 3) train live on the phone (one command):
+python scripts/train_rl.py --live --serial <SERIAL> --controls controls.json
+```
+
+Offline mode is only for checking the pipeline — in a recording the agent's actions
+can't change the frames, so real policy learning happens live on the phone.
+
+**This design starts from scratch.** It writes to `brawlstars_ppo_polar.zip` and
+`checkpoints_polar/`, so it will not touch — or try to resume from — the v3
+`checkpoints/` or the 15×15 `checkpoints_waypoint/`. You do not need `--fresh`;
+you need it only to abandon a `_polar` run and restart. Re-running the same
+command resumes, and Ctrl+C saves first.
+
+### What to watch in the first hour of training/running
+
+```bash
+tensorboard --logdir tb_logs
+```
+Run this command to see dedicated graphs to multiple functions. 
+
+Beyond `rollout/ep_rew_mean`, the things that tell you the new machinery is
+actually working live:
+
+| Symptom | Likely cause |
+|---|---|
+| `Intent(...)` almost never says `(committed)` | anchor detection is failing, so the planner can't latch — check `watch_live.py` |
+| `(blocked)` on most steps | terrain constants are wrong for this map — re-run the calibration above |
+| Agent walks into walls | same, or `controls.json` joystick coords are off |
+| Movement still jittery | commitments too short — raise `PathPlannerConfig.commit_ticks` |
+| `box_progress` dominating the breakdown | lower `RewardConfig.box_shaping` (it is shaping, not an objective) |

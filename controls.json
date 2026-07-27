@@ -1,0 +1,16 @@
+{
+  "move_center": [
+    329,
+    851
+  ],
+  "attack_btn": [
+    2186,
+    874
+  ],
+  "super_btn": [
+    1776,
+    806
+  ],
+  "move_radius": 180,
+  "hold_ms": 200
+}

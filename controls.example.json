@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to controls.json and replace with YOUR Pixel's pixel coordinates. Find them by screenshotting a match (adb exec-out screencap -p > hud.png) and reading the center of each control. See docs/ANDROID_CONTROL.md.",
+  "move_center": [360, 820],
+  "attack_btn": [2130, 880],
+  "super_btn": [1950, 700],
+  "move_radius": 180,
+  "hold_ms": 200
+}

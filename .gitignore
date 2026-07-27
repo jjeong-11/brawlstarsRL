@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# Runtime / model output
+debugOutput/live_preview.png
+brawlstars_ppo.zip
+checkpoints/
+tb_logs/
+*.tmp

@@ -1,0 +1,14 @@
+# --- Perception (computer vision) ---
+opencv-python>=4.5
+numpy>=1.21
+pytesseract>=0.3.10        # also requires the system `tesseract` binary:
+                          #   macOS:  brew install tesseract
+                          #   Ubuntu: sudo apt install tesseract-ocr
+mss>=6.0                  # only needed for live screen capture (--screen)
+# scrcpy-client is intentionally optional: its bundled 2022 server is not
+# compatible with the phone used for live training.
+
+# --- Reinforcement learning ---
+gymnasium>=0.29           # env API
+stable-baselines3>=2.0    # PPO trainer
+tensorboard>=2.10         # training curves (entropy, reward) via --logdir tb_logs
