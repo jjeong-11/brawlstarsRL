@@ -225,7 +225,7 @@ Plus **`gas_dilate_cells`**: gas is spread 2 cells before costing, so ground the
 cloud is *about to* reach is already expensive. Costing only the visible cloud
 means reacting once it is on top of you, which in the endgame is too late.
 
-⚠️ The grid's outer ring is the **screen** edge, not the map border — mid-map
+The grid's outer ring is the **screen** edge, not the map border — mid-map
 they are unrelated, and penalising it would block most long-range movement.
 That is why the signal is openness rather than distance-to-frame-edge.
 
