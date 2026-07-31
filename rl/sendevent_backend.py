@@ -34,9 +34,62 @@ from typing import Optional
 from .actions import ActionExecutor, Controls, Intent
 
 # --- device profile (from getevent -pl) --------------------------------------
+# Defaults measured on one Pixel. `detect_touch_device()` overrides them from
+# the phone at startup — writing raw events to the WRONG /dev/input node either
+# does nothing or drives some other sensor, and with the wrong ABS ranges every
+# touch lands in the wrong place, both of which fail silently.
 TOUCH_DEVICE = "/dev/input/event2"
 ABS_X_MAX = 10799     # portrait short axis  <- landscape HEIGHT
 ABS_Y_MAX = 24239     # portrait long axis   <- landscape WIDTH
+
+
+def detect_touch_device(serial: Optional[str] = None):
+    """Find the touchscreen and its coordinate ranges via `getevent -pl`.
+
+    Returns (device_path, abs_x_max, abs_y_max), falling back to the measured
+    Pixel defaults if anything cannot be parsed. The touchscreen is the node
+    advertising ABS_MT_POSITION_X/Y — that is what makes it a multitouch
+    digitizer, as opposed to buttons, sensors or a virtual keyboard.
+    """
+    base = ["adb"] + (["-s", serial] if serial else [])
+    try:
+        out = subprocess.run(base + ["shell", "getevent", "-pl"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return TOUCH_DEVICE, ABS_X_MAX, ABS_Y_MAX
+
+    def axis_max(line):
+        # "    ABS_MT_POSITION_X   : value 0, min 0, max 10799, fuzz 0, flat 0"
+        for part in line.split(","):
+            part = part.strip()
+            if part.startswith("max "):
+                try:
+                    return int(part.split()[1])
+                except (IndexError, ValueError):
+                    return None
+        return None
+
+    device = None
+    axes = {}
+    for line in out.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("add device"):
+            if device and "x" in axes and "y" in axes:
+                break                       # the previous device was the digitizer
+            device = stripped.split(":")[-1].strip()   # "add device 1: /dev/input/event2"
+            axes = {}
+        elif "ABS_MT_POSITION_X" in stripped:
+            v = axis_max(stripped)
+            if v:
+                axes["x"] = v
+        elif "ABS_MT_POSITION_Y" in stripped:
+            v = axis_max(stripped)
+            if v:
+                axes["y"] = v
+
+    if device and "x" in axes and "y" in axes:
+        return device, axes["x"], axes["y"]
+    return TOUCH_DEVICE, ABS_X_MAX, ABS_Y_MAX
 
 # Landscape display size your controls.json / screencap are in.
 LAND_W, LAND_H = 2424, 1080
@@ -58,13 +111,25 @@ class SendeventExecutor(ActionExecutor):
 
     def __init__(self, serial: Optional[str] = None, controls: Optional[Controls] = None,
                  flip_short: bool = False, flip_long: bool = True,
-                 device: str = TOUCH_DEVICE):
+                 device: Optional[str] = None):
         if shutil.which("adb") is None:
             raise RuntimeError("`adb` not found on PATH — connect your phone first.")
         self.controls = controls or Controls.from_screen(LAND_W, LAND_H)
         self.flip_short = flip_short     # mirror along the short axis (landscape Y)
         self.flip_long = flip_long       # mirror along the long axis (landscape X)
-        self.device = device
+
+        # Ask the phone which node is the digitizer and what its ranges are,
+        # rather than trusting constants measured on one Pixel. Both failure
+        # modes here are SILENT: the wrong node swallows the events, and wrong
+        # ABS ranges put every touch in the wrong place. `device=None` means
+        # auto-detect; pass an explicit path to override.
+        self.abs_x_max, self.abs_y_max = ABS_X_MAX, ABS_Y_MAX
+        if device is None:
+            self.device, self.abs_x_max, self.abs_y_max = detect_touch_device(serial)
+            print(f"[sendevent] touch device {self.device} "
+                  f"(ABS_MT_POSITION_X max {self.abs_x_max}, Y max {self.abs_y_max})")
+        else:
+            self.device = device
         self._base = ["adb"] + (["-s", serial] if serial else [])
         self._active = {}                # slot -> tracking id (currently down)
         self._next_id = 1
@@ -79,7 +144,7 @@ class SendeventExecutor(ActionExecutor):
             fs = 1.0 - fs
         if self.flip_long:
             fl = 1.0 - fl
-        return int(round(fs * ABS_X_MAX)), int(round(fl * ABS_Y_MAX))
+        return int(round(fs * self.abs_x_max)), int(round(fl * self.abs_y_max))
 
     # -- raw event plumbing --
     def _emit(self, lines):
@@ -186,7 +251,7 @@ class SendeventExecutor(ActionExecutor):
 def make_sendevent_env(serial: Optional[str] = None, controls: Optional[Controls] = None,
                        reward_config=None, tick_seconds: float = 0.1,
                        flip_short: bool = False, flip_long: bool = True,
-                       device: str = TOUCH_DEVICE, **kwargs):
+                       device: Optional[str] = None, **kwargs):
     """Live env: raw-multitouch control (smooth) + adb screencap capture."""
     from .env import BrawlStarsEnv
     from perception.liveLoop import AdbScreencapSource

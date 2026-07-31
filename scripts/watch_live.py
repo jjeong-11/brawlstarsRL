@@ -5,16 +5,30 @@ Watch live rewards from the phone — verify perception + calibration BEFORE tra
 Captures frames from a connected Android phone, runs the full perception stack,
 and prints per-tick readings (HP, cubes, super%, brawlers-left, gas, enemies) plus
 the reward breakdown — exactly what the agent would learn from. It does NOT send
-any actions by default, so it's safe to just observe.
+any actions, so it's safe to just observe.
 
     python scripts/watch_live.py --serial <SERIAL>
     python scripts/watch_live.py --serial <SERIAL> --save-preview      # annotated frame -> debugOutput/
+    python scripts/watch_live.py --serial <SERIAL> --trace 2           # decision traces (see below)
     python scripts/watch_live.py --serial <SERIAL> --calibrate --controls controls.json
 
 Use this to confirm:
   * perception reads YOUR phone's HUD correctly (nudge getSuper.SUPER_ROI etc. if not),
   * the rewards make sense as you play,
   * (with --calibrate) the executor taps land on the real buttons.
+
+WATCHING THE AGENT THINK (--trace)
+----------------------------------
+With --trace the saved policy is loaded and asked for an action every tick, and
+the planner is run on it — but the executor is never invoked, so NOTHING is sent
+to the phone. You play; the agent decides alongside you and its intended route is
+written to debugOutput/trace/.
+
+That separation is the whole value: on the phone a bad route and bad perception
+look identical, because all you see is a brawler walking into a wall. Here you can
+watch the destination it picked and the path it planned while YOU control where
+the brawler actually goes — so you can deliberately stand next to a wall, or in
+the gas, and see what it would have done about it.
 """
 import argparse
 import pathlib
@@ -26,12 +40,15 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import cv2  # noqa: E402
 from perception.liveLoop import AdbScreencapSource, LivePerception  # noqa: E402
 from perception.getSuper import SUPER_ROI  # noqa: E402
+from perception.getTerrain import find_terrain, play_rect, ProfileSelector, GRID_W, GRID_H  # noqa: E402
+from perception.getGas import gas_info  # noqa: E402
 from rl.state import adapt_live_state  # noqa: E402
 from rl.rewards import RewardCalculator, RewardConfig  # noqa: E402
 from rl.kills import KillAttributor  # noqa: E402
 from rl.actions import Controls  # noqa: E402
 
-_DEBUG = pathlib.Path(__file__).resolve().parent.parent / "debugOutput"
+_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_DEBUG = _ROOT / "debugOutput"
 
 
 def _draw_preview(frame, live, controls):
@@ -97,6 +114,14 @@ def main() -> None:
     ap.add_argument("--calibrate", action="store_true",
                     help="first tap each control once (verify AdbExecutor placement)")
     ap.add_argument("--controls", default=None, help="controls.json for --calibrate")
+    ap.add_argument("--trace", type=float, default=0.0, metavar="SECONDS",
+                    help="run the planner alongside you and write an annotated "
+                         "decision frame every SECONDS to debugOutput/trace/. "
+                         "Nothing is sent to the phone. Try 2.")
+    ap.add_argument("--model", default=None,
+                    help="policy to ask for actions under --trace. Defaults to "
+                         "./brawlstars_ppo_polar.zip; without one, headings are "
+                         "sampled at random, which still exercises the planner.")
     args = ap.parse_args()
 
     try:
@@ -122,6 +147,14 @@ def main() -> None:
     calc.reset()
     killer = KillAttributor()
     killer.reset()
+
+    tracer = _make_tracer(args) if args.trace else None
+    planner = camera = profiles = policy = None
+    if tracer is not None:
+        from rl.path_planner import WaypointPlanner
+        from rl.camera_tracker import CameraTracker
+        planner, camera, profiles = WaypointPlanner(), CameraTracker(), ProfileSelector()
+        policy = _load_policy(args.model)
 
     started = time.time()
     ticks = 0
@@ -159,6 +192,10 @@ def main() -> None:
                   f"super:{(state.super_charge or 0)*100:.0f}% left:{state.players_left} "
                   f"gas:{state.in_gas} enemies:{len(state.enemy_positions)} {bd}", flush=True)
 
+            if tracer is not None and tracer.due():
+                _trace_decision(tracer, frame, live, state, result, ticks,
+                                planner, camera, profiles, policy, calc)
+
             if args.save_preview and time.time() - last_preview >= 1.0:
                 _DEBUG.mkdir(parents=True, exist_ok=True)
                 cv2.imwrite(str(_DEBUG / "live_preview.png"), _draw_preview(frame, live, controls))
@@ -171,7 +208,85 @@ def main() -> None:
         print("\nstopped.")
     finally:
         source.close()
+        if tracer is not None:
+            tracer.close()
+            print(f"traces -> {tracer.dir}")
         print(f"\n{ticks} ticks. reward totals: {dict(calc.episode_breakdown)}")
+
+
+# --- decision tracing -------------------------------------------------------- #
+def _make_tracer(args):
+    from rl.debug_trace import DecisionTracer, TraceConfig
+    t = DecisionTracer(TraceConfig(every_seconds=args.trace))
+    print(f"tracing decisions every {args.trace}s -> {t.dir} (no input is sent)")
+    return t
+
+
+def _load_policy(path):
+    """The saved PPO policy, or None to fall back to random headings.
+
+    Random is not a useless fallback: the planner is what turns a heading into
+    a route, so random headings still exercise every part of the pathfinding
+    (relocation, A*, clearance, gas escape) against real frames. It just does
+    not tell you whether the POLICY is choosing sensibly.
+    """
+    p = pathlib.Path(path) if path else (_ROOT / "brawlstars_ppo_polar.zip")
+    if not p.exists():
+        print(f"no policy at {p} — tracing with random headings")
+        return None
+    try:
+        from stable_baselines3 import PPO
+        model = PPO.load(str(p.with_suffix("")))
+        print(f"loaded policy {p.name}")
+        return model
+    except Exception as e:
+        print(f"could not load {p.name} ({e}) — tracing with random headings")
+        return None
+
+
+def _trace_decision(tracer, frame, live, state, result, tick,
+                    planner, camera, profiles, policy, calc):
+    """Run terrain + gas + planner on this frame and write one trace image.
+
+    Mirrors what `rl/env.py` does per step, minus the executor — deliberately,
+    so the trace shows the same decision the trainer would make rather than an
+    approximation of it.
+    """
+    import numpy as np
+    from rl.actions import decode_action
+    from rl.env import encode_observation
+
+    fh, fw = frame.shape[:2]
+    terrain = None
+    if state.player_pos is not None:
+        try:
+            terrain = find_terrain(frame, player_pos=state.player_pos, selector=profiles)
+        except Exception:
+            terrain = None
+    rect = terrain["rect"] if terrain else play_rect(frame)
+    try:
+        gas = gas_info(frame, grid_rect=rect, grid_size=(GRID_W, GRID_H))["grid"]
+    except Exception:
+        gas = None
+    if terrain is None and rect is not None:
+        planner.world.set_geometry(rect, (GRID_W, GRID_H))
+
+    dx, dy, ok = camera.update(frame, rect)
+    camera_delta = (dx, dy) if ok else (0.0, 0.0)
+
+    if policy is not None:
+        max_hp = calc._max_health or calc.config.default_max_health
+        obs = encode_observation(state, max_hp, (fw, fh),
+                                 planner_status=planner.status())
+        action, _ = policy.predict(obs, deterministic=False)
+        action = [int(v) for v in np.asarray(action).ravel()[:4]]
+    else:
+        action = [int(np.random.randint(16)), int(np.random.randint(3)), 0, 0]
+
+    intent = decode_action(action, state=state, frame_size=(fw, fh), planner=planner,
+                           terrain=terrain, camera_delta=camera_delta, gas_grid=gas)
+    tracer.capture(frame, planner, state, intent=intent, reward=result,
+                   live=live, tick=tick, force=True)
 
 
 if __name__ == "__main__":

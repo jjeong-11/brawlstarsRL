@@ -30,12 +30,27 @@ _DEFAULT_VIDEO = _ROOT / "media" / "testvideos" / "test_game1.mp4"
 def make_env(live: bool = False, serial=None, controls_path=None, tick_seconds: float = 0.1,
              action_repeat: int = 1, use_scrcpy: bool = False, use_sendevent: bool = False,
              sendevent_orientation: str = "A", sendevent_device: str = None,
-             profile_every: int = 0):
+             profile_every: int = 0, trace_seconds: float = 0.0):
     reward_config = RewardConfig()   # spec defaults; tune here
+    extra = {"trace_seconds": trace_seconds} if trace_seconds else {}
 
     if not live:
+        # The recordings are gitignored (612MB, two of them over GitHub's 100MB
+        # per-file limit), so a fresh clone will not have them. Nothing at
+        # runtime needs them — say what is missing rather than failing inside
+        # cv2 with an unhelpful error.
+        if not _DEFAULT_VIDEO.exists():
+            raise SystemExit(
+                f"Offline mode needs a recording, and {_DEFAULT_VIDEO} is not "
+                f"present.\n"
+                f"Gameplay recordings are not committed (see .gitignore).\n\n"
+                f"  * to train for real:   add --live --serial <SERIAL>\n"
+                f"  * to smoke-test offline: drop any Brawl Stars screen "
+                f"recording at that path\n"
+                f"  * to check perception:  python scripts/check_perception.py "
+                f"--image your_screenshot.png")
         env = make_video_env(str(_DEFAULT_VIDEO), reward_config=reward_config,
-                             executor=LoggingExecutor(), tick_seconds=0.0)
+                             executor=LoggingExecutor(), tick_seconds=0.0, **extra)
     elif use_sendevent:
         # Smooth movement via raw multitouch (no scrcpy/PyAV needed).
         from .sendevent_backend import make_sendevent_env
@@ -50,7 +65,8 @@ def make_env(live: bool = False, serial=None, controls_path=None, tick_seconds: 
         env = make_sendevent_env(serial=serial, controls=controls,
                                  reward_config=reward_config, tick_seconds=tick_seconds,
                                  flip_short=flip_short, flip_long=flip_long,
-                                 device=sendevent_device or "/dev/input/event2")
+                                 device=sendevent_device,  # None -> auto-detect
+                                 **extra)
     elif use_scrcpy:
         # Smooth path: scrcpy for held-touch movement + fast capture.
         from .scrcpy_backend import make_scrcpy_env
@@ -58,7 +74,7 @@ def make_env(live: bool = False, serial=None, controls_path=None, tick_seconds: 
         controls = Controls.from_json(controls_path) if controls_path else None
         env = make_scrcpy_env(serial=serial, controls=controls,
                               reward_config=reward_config,
-                              tick_seconds=min(tick_seconds, 0.05))
+                              tick_seconds=min(tick_seconds, 0.05), **extra)
     else:
         # adb path: works everywhere, but movement is bursty (see --scrcpy).
         from .actions import AdbExecutor, Controls
@@ -70,7 +86,8 @@ def make_env(live: bool = False, serial=None, controls_path=None, tick_seconds: 
             controls = controls.tuned_for_tick(tick_seconds)
         executor = AdbExecutor(serial=serial, controls=controls)  # None -> auto from screen
         env = make_phone_env(serial=serial, executor=executor,
-                             reward_config=reward_config, tick_seconds=tick_seconds)
+                             reward_config=reward_config, tick_seconds=tick_seconds,
+                             **extra)
 
     if profile_every:
         env.profile_every = int(profile_every)
@@ -140,8 +157,18 @@ def main() -> None:
                          "goes, every N steps (try 200). Tells you whether you are "
                          "capture-bound, perception-bound or idle-waiting — which "
                          "is the only way to know what is worth optimising.")
+    ap.add_argument("--trace", type=float, default=0.0, metavar="SECONDS",
+                    help="every SECONDS, write an annotated frame to "
+                         "debugOutput/trace/ showing the route the planner "
+                         "intends to walk: fused occupancy + gas, the A* path, "
+                         "the latched waypoint, the joystick vector, the decoded "
+                         "action and the reward breakdown. Try 2. This is how "
+                         "you tell a perception bug from a bad destination from "
+                         "a bad route -- they look identical from the outside.")
     ap.add_argument("--sendevent-device", default=None,
-                    help="raw touch device, e.g. /dev/input/event2 (default: event2)")
+                    help="raw touch device, e.g. /dev/input/event2. Default: "
+                         "auto-detect from `adb shell getevent -pl` (the node "
+                         "advertising ABS_MT_POSITION_X/Y).")
     args = ap.parse_args()
 
     controls_path = _default_controls_path(args.controls) if args.live else None
@@ -156,7 +183,7 @@ def main() -> None:
                        use_sendevent=args.sendevent,
                        sendevent_orientation=args.sendevent_orientation,
                        sendevent_device=args.sendevent_device,
-                       profile_every=args.profile)
+                       profile_every=args.profile, trace_seconds=args.trace)
     except RuntimeError as e:
         print("Could not start live env:", e)
         return

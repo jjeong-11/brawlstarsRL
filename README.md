@@ -20,17 +20,14 @@ its observations imperfect and sometimes inaccurate.
 In fact, the system operates at a disadvantage compared to human players. 
 The reinforcement learning pipeline currently processes observations at 
 approximately 10 frames per second introducing aprroximately hundred milliseconds of 
-latency between observing the game and responding. Humans percieve and react
-to visual updates occurring at 60-120 frames per second, giving them substantially 
-faster reaction times. 
+latency between observing the game and responding. On the other hand, humans percieve and react to visual updates occurring at 60-120 frames per second, giving them substantially faster reaction times. 
 
 Although this project automates gameplay, I do NOT promote or encourage botting 
 on team-gamemodes or using bots to push the Ranked Gamemode. The purpose
 of this project is to explore reinforcement learning, computer vision, and 
-autonomous decision making in a real-time game environment. It is intended as a research 
-and educational project rather than a competitive tool. 
+autonomous decision making in a real-time game environment. It is intended as a research and educational project rather than a competitive tool. 
 
-
+Please refer to DISCLAIMER.md for further information. 
 
 ## Folder layout
 
@@ -56,7 +53,9 @@ projectv2/
 │   ├── kills.py             KillAttributor (credits the agent's knockouts)
 │   ├── actions.py           action space + ActionExecutor (Logging / ADB phone)
 │   ├── camera_tracker.py    frame-to-frame world scroll (keeps waypoints still)
-│   ├── path_planner.py      latched destination + A* over the terrain grid
+│   ├── world_map.py         persistent, camera-registered occupancy + gas map
+│   ├── path_planner.py      latched destination + A* over that map
+│   ├── debug_trace.py       annotated "what did it decide, and where is it going"
 │   ├── env.py               BrawlStarsEnv (Gymnasium) — glues everything
 │   └── train.py             Stable-Baselines3 PPO
 ├── scripts/             Entry points you actually run
@@ -69,7 +68,7 @@ projectv2/
 ├── tools/               Offline utilities (harvest templates, classifier, calibrate_map.py)
 ├── media/               testphotos/ testvideos/ crops/ gasphotos/ (labelled gas fixtures)
 ├── training_data/       username-classifier dataset
-├── debugOutput/         annotated frames written at runtime
+├── debugOutput/         annotated frames written at runtime (trace/ = decision traces)
 ├── requirements.txt     README.md      LICENSE
 ```
 
@@ -193,6 +192,33 @@ through the cloud, and an agent taught "never enter gas" would corner itself and
 die in exactly the endgame where that is fatal. A\* takes the detour when one
 exists and crosses when one does not.
 
+### Staying off the map border
+
+The zone closes **inward**, so the map edge is where gas arrives first — and
+the planner had a bias straight towards it. A heading pointing off-map was
+relocated to the nearest legal cell, which is by definition the border ring, so
+destinations collapsed onto the edge. Measured from a spot near an edge, **46%
+of all 48 heading/distance combinations landed in the outer 3 cells**, and
+distinct destinations dropped from 48 to 43.
+
+Two corrections, both planner-side:
+
+- **`border_cost`** — out-of-bounds decoration segments as unwalkable, so
+  "blocked area nearby" is a reliable proxy for "close to the map edge" with no
+  map knowledge required. `_openness()` measures it and A\* pays a penalty for
+  closed-in ground.
+- **`min_destination_openness`** — a destination in closed ground is pulled back
+  along the ray toward the player until it reaches open space, instead of being
+  snapped to the nearest legal cell.
+
+Plus **`gas_dilate_cells`**: gas is spread 2 cells before costing, so ground the
+cloud is *about to* reach is already expensive. Costing only the visible cloud
+means reacting once it is on top of you, which in the endgame is too late.
+
+⚠️ The grid's outer ring is the **screen** edge, not the map border — mid-map
+they are unrelated, and penalising it would block most long-range movement.
+That is why the signal is openness rather than distance-to-frame-edge.
+
 **Gas vs foliage is the trap in this whole subsystem.** Gas is a pale-green
 puffy overlay; several maps have green bushes at the same hue. Measured across
 four themes:
@@ -229,7 +255,8 @@ The three layers underneath:
 | --- | --- |
 | `perception/getTerrain.py` | segments floor / wall / bush → a 48×27 walkability grid (~0.8 ms) |
 | `rl/camera_tracker.py` | phase-correlates consecutive frames → how far the world scrolled |
-| `rl/path_planner.py` | **latches** the destination in world space and A*s to it |
+| `rl/world_map.py` | fuses those grids into one persistent 144×81 map that remembers |
+| `rl/path_planner.py` | **latches** the destination on that map and A*s to it (~2.3 ms) |
 
 Latching is the point. The camera follows the player, so a destination stored in
 screen pixels retreats at exactly the player's walking speed and is never reached —
@@ -259,13 +286,82 @@ Run `python scripts/test_waypoint.py` to exercise the planner in a synthetic
 scrolling world (arrival, wall routing, gas override, and a regression guard against
 the un-latched behaviour).
 
+### The map is persistent, and that fixes three things
+
+`find_terrain` describes one frame in screen space. `rl/world_map.py` fuses those
+frames into a single 144×81 map — three screens wide — kept registered to the world
+by the same camera delta that latches waypoints. Three failures came from not having
+that:
+
+* **Wedging on walls.** A* plans for a dimensionless point on cells about as wide as
+  the brawler, so the optimal route runs flush against wall faces and cuts outside
+  corners exactly. The map keeps a distance transform of free space, so cells closer
+  to a wall than the agent's half-width are removed from the graph and a soft cost
+  pulls routes down the middle of gaps. The inflation *relaxes* if it would seal a
+  legitimate one-cell doorway. Stuck detection is still there, but as a backstop.
+* **Short-sightedness.** ~20% of the play area is permanently behind the HUD and was
+  marked `unknown` every frame, so those cells were never resolved; a far waypoint
+  that scrolled off screen had its goal clamped to the grid border. Unknown cells are
+  now *skipped* rather than fused, so they fill in from later frames as the camera
+  scrolls them out from under the buttons, and waypoints live in map cells so they
+  stay valid off screen.
+* **Walking into the gas.** See below.
+
+### Why the agent used to walk into the smoke
+
+Three independent causes, all fixed:
+
+1. **The escape vector pointed the wrong way.** `getGas.safe_vector` is
+   `player − gas_centroid`. Showdown's cloud closes inward as a **ring**, and the
+   centroid of a ring is the middle of the *safe zone* — so "away from the centroid"
+   points outward, deeper into the gas. It looked fine early (a partial cloud has an
+   off-centre centroid) and was lethal late, and it overrode the entire A* plan
+   whenever `in_gas` was set. Replaced by a Dijkstra outward from the player over the
+   gas-weighted cost field that stops at the first genuinely safe reachable cell —
+   correct for any cloud shape, because it asks *where is safe ground* instead of
+   assuming the cloud is a blob.
+2. **Gas was forgotten.** The cached grid was rolled by the camera delta with newly
+   exposed edges filled with **zero**, so ground the agent had just fled came back
+   into view labelled clean. Gas is now fused into the map asymmetrically — fast up,
+   slow down — because the cloud never retreats, and it is extrapolated into ground
+   the detector has not covered, because a cloud does not stop at the edge of the
+   screen.
+3. **Gas was gated behind terrain.** It was computed inside the `if terrain is not
+   None` branch, so on any map without a colour profile the planner had no spatial
+   gas at all. Gas is an engine overlay drawn identically on every map and `play_rect`
+   finds the panel from the letterbox alone, so geometry and gas are now established
+   independently of the profile.
+
+### Seeing what it decided (`--trace`)
+
+```bash
+python scripts/train_rl.py --live --serial <SERIAL> --trace 2   # every 2 seconds
+python scripts/watch_live.py --serial <SERIAL> --trace 2        # watch, send nothing
+```
+
+Writes an annotated frame to `debugOutput/trace/` plus one JSON record per decision
+in `trace.jsonl`. The frame carries all three layers at once — the fused occupancy
+and gas the planner actually used, the latched waypoint and the A* route to it, and
+the joystick vector that came out — because from the outside a perception bug, a bad
+destination and a bad route all look identical: a brawler walking into a wall. A path
+that ends somewhere silly means the *destination* was wrong; a sensible destination
+with a route hugging a wall means the *cost field* was wrong. The inset shows the
+whole world map including the parts currently off screen, which is where the most
+confusing failures live.
+
+`watch_live.py --trace` loads the saved policy and runs the planner alongside you
+without touching the phone, so you can stand next to a wall or in the gas on purpose
+and see what it would have done.
+
 ### Checkpoints are not interchangeable
 
 | directory | design | obs |
 | --- | --- | --- |
-| `checkpoints/` | v3, `MultiDiscrete([9, 2, 2])` 8-way | 46 |
-| `checkpoints_waypoint/` | 15×15 grid waypoints | 46 |
 | `checkpoints_polar/` | current, `MultiDiscrete([16, 3, 2, 2])` | 60 |
+
+Earlier designs (`checkpoints/` for the 8-way v3, `checkpoints_waypoint/` for the
+15×15 grid) have been deleted — their weights could never be loaded by this action
+space anyway.
 
 Both the action head and the input layer changed shape, so weights cannot transfer.
 `train.py` writes each design to its own path and refuses a mismatched resume.
@@ -299,8 +395,12 @@ python scripts/run_live.py --video media/testvideos/test_game1.mp4
 # reward-engine unit tests (no cv2/gym needed):
 python scripts/test_rewards.py
 
-# planner tests: latching, A* around walls, gas cost, reward-shaping exploits
+# planner tests: latching, A* around walls, wall clearance, map memory,
+# gas-ring escape, reward-shaping exploits  (38 tests, ~30s)
 python scripts/test_waypoint.py
+
+# render one decision trace from a screenshot (no phone needed):
+python -m rl.debug_trace showdown.png     # -> debugOutput/trace/trace_0000.jpg
 
 # train PPO offline on a recording (plumbing / reward check):
 python scripts/train_rl.py
@@ -382,7 +482,26 @@ loop merely *looked* twice as productive.
 **If SB3 reports far less than the in-match rate**, the difference is between
 matches: end-of-match animations, menu navigation and matchmaking all happen
 inside `reset()`, and SB3 charges that wall clock against every step. The
-profile prints it as a separate line.
+profile prints it as a separate line, and `--profile` also emits a
+`[navigate]` breakdown per reset.
+
+### Between-match navigation
+
+`_navigate_to_match` used to tap a menu button and then sleep 1.0–1.2 s, which
+fused two unrelated rates: how often it *looks* at the screen, and how often it
+*taps*. Every transition was therefore noticed up to 1.2 s late, and a measured
+reset cost 24.2 s — 71% of wall clock, almost all of it asleep.
+
+They are now separate: **poll every 0.3 s, tap at most once per second per
+screen**. Fast polling catches a transition quickly; the tap rate limit stops
+that becoming a burst of taps, which would land on whatever is underneath once
+the menu advances. The poll also waits out the *remainder* of its interval
+rather than sleeping a flat amount on top of the synchronous screencap.
+
+On a scripted 2.0 s menu timeline: **overshoot 1.32 s → 0.13 s**, same two taps.
+
+The rest of a reset is the game's own end-screen animation and matchmaking,
+which nothing here can shorten.
 
 ### Run this before every training session
 

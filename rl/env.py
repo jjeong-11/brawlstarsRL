@@ -51,7 +51,8 @@ except Exception:  # allow import/use without gymnasium installed
 from perception.liveLoop import (  # noqa: E402
     LivePerception, VideoSource, ScreenSource, AdbScreencapSource)
 from perception.getGameState import get_game_state  # noqa: E402
-from perception.getTerrain import find_terrain, ProfileSelector  # noqa: E402
+from perception.getTerrain import (  # noqa: E402
+    find_terrain, play_rect, ProfileSelector, GRID_W, GRID_H)
 from perception.getGas import gas_info  # noqa: E402
 
 from .actions import make_action_space, LoggingExecutor, ActionExecutor
@@ -290,6 +291,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         kills_fn: Optional[Callable] = None,
         move_window_seconds: float = 3.0,
         profile_every: int = 0,
+        trace_seconds: float = 0.0,
     ):
         self.source_factory = source_factory
         # >0 prints a wall-clock breakdown every N steps (see _report_profile).
@@ -317,6 +319,17 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self._last_state = GameState()
         self.path_planner = WaypointPlanner(_planner_config_for(tick_seconds))
         self.camera = CameraTracker()
+
+        # Decision tracing: an annotated frame every `trace_seconds` showing the
+        # route the planner intends to walk. Off (0) by default because it
+        # costs a frame copy per step to keep the image around.
+        self.tracer = None
+        if trace_seconds and trace_seconds > 0:
+            from .debug_trace import DecisionTracer, TraceConfig
+            self.tracer = DecisionTracer(TraceConfig(every_seconds=float(trace_seconds)))
+            print(f"[trace] annotated decisions every {trace_seconds}s -> "
+                  f"{self.tracer.dir}")
+        self._last_frame = None
         # Per-env, not the module default: each episode is a fresh match and may
         # be a different map, so the profile choice must not carry over.
         self.terrain_profiles = ProfileSelector()
@@ -329,9 +342,8 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self._velocity = (0.0, 0.0)
         self._prev_player_pos = None
         self._prev_action = None
-        self._gas_grid = None          # cached; refreshed every _GAS_REFRESH_STEPS
-        self._gas_age = 0
-        self._gas_drift = [0.0, 0.0]   # sub-cell camera drift not yet rolled off
+        self._gas_grid_now = None      # this step's reading, None between refreshes
+        self._gas_age = 0              # steps since the detector last ran
         self._last_rect = None         # keeps the camera crop stable across skips
         self._next_tick_at = None      # deadline for _pace()
 
@@ -344,8 +356,17 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
     # reference screenshots (defeated.png / endMenu.png at the repo root).
     EXIT_BUTTON_NORM = (0.538, 0.922)          # "Exit" on the defeated screen (dead-center, measured on defeated.png)
     PLAY_AGAIN_BUTTON_NORM = (0.7376, 0.9167)  # "Play Again" on the end menu
-    END_MENU_WAIT = 5.0        # settle time before Play Again is tappable
     NAVIGATE_TIMEOUT = 180.0   # give up navigating after this many seconds
+    # How often to LOOK at the screen while navigating menus. This used to be
+    # fused with the tap rate at 1.0-1.2s, which meant every screen transition
+    # was noticed up to 1.2s after it happened. Measured: 24.2s per reset, 71%
+    # of wall clock, the large majority of it sleeping.
+    NAVIGATE_POLL = 0.3
+    # Minimum gap between taps on the SAME screen. Polling and tapping are
+    # deliberately decoupled: look often so a transition is caught quickly, tap
+    # rarely so a button is never machine-gunned (a second tap landing after
+    # the menu advances would hit whatever is now underneath).
+    NAVIGATE_TAP_INTERVAL = 1.0
 
     # ------------------------------------------------------------------ #
     def reset(self, *, seed=None, options=None):
@@ -371,11 +392,11 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self._velocity = (0.0, 0.0)
         self._prev_player_pos = None
         self._prev_action = None
-        self._gas_grid = None          # cached; refreshed every _GAS_REFRESH_STEPS
-        self._gas_age = 0
-        self._gas_drift = [0.0, 0.0]   # sub-cell camera drift not yet rolled off
+        self._gas_grid_now = None      # this step's reading, None between refreshes
+        self._gas_age = 0              # steps since the detector last ran
         self._last_rect = None         # keeps the camera crop stable across skips
         self._next_tick_at = None      # deadline for _pace()
+        self._last_frame = None
         state = self._observe()
         self._last_state = state
         self._last_enemy_count = len(state.enemy_positions)
@@ -407,32 +428,60 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         resume = getattr(self.source, "resume", None)
         if pause:
             pause()
+        buttons = {"defeated": self.EXIT_BUTTON_NORM,
+                   "match_end": self.PLAY_AGAIN_BUTTON_NORM}
+        prof = {"grab": 0.0, "classify": 0.0, "sleep": 0.0, "polls": 0, "taps": 0}
+        t_start = time.perf_counter()
         try:
             deadline = time.time() + self.NAVIGATE_TIMEOUT
+            last_tap_at = 0.0
+            last_screen = None
             while time.time() < deadline:
+                poll_due = time.perf_counter() + self.NAVIGATE_POLL
+
+                t0 = time.perf_counter()
                 frame = self.source.grab()
-                if frame is None:
-                    time.sleep(0.5)
-                    continue
-                screen = get_game_state(frame)["state"]
-                if screen == "in_match":
-                    return
-                # Tap the button on EVERY pass while the screen is showing (rather
-                # than one well-timed shot). Early taps during the rank/trophy
-                # animation harmlessly miss; a later one lands once the button is
-                # live, and the loop stops as soon as the screen advances.
-                if screen == "defeated":
-                    self.executor.tap_norm(*self.EXIT_BUTTON_NORM)
-                    time.sleep(1.2)
-                elif screen == "match_end":
-                    self.executor.tap_norm(*self.PLAY_AGAIN_BUTTON_NORM)
-                    time.sleep(1.2)
-                else:                            # loading / countdown / unknown
-                    time.sleep(1.0)
+                prof["grab"] += time.perf_counter() - t0
+                prof["polls"] += 1
+
+                if frame is not None:
+                    t0 = time.perf_counter()
+                    screen = get_game_state(frame)["state"]
+                    prof["classify"] += time.perf_counter() - t0
+                    if screen == "in_match":
+                        return
+
+                    # Re-tap while the screen is still showing: early taps during
+                    # the rank/trophy animation harmlessly miss, and a later one
+                    # lands once the button goes live. Rate-limited per screen so
+                    # fast polling does not turn into a burst of taps.
+                    if screen != last_screen:
+                        last_tap_at = 0.0        # new screen, tap immediately
+                        last_screen = screen
+                    target = buttons.get(screen)
+                    if target and time.time() - last_tap_at >= self.NAVIGATE_TAP_INTERVAL:
+                        self.executor.tap_norm(*target)
+                        last_tap_at = time.time()
+                        prof["taps"] += 1
+
+                # Wait out the REMAINDER of the poll interval. The grab is a
+                # synchronous screencap while capture is paused (a few hundred
+                # ms), so sleeping a flat interval on top of it would roughly
+                # double the polling period.
+                t0 = time.perf_counter()
+                remaining = poll_due - time.perf_counter()
+                if remaining > 0:
+                    time.sleep(remaining)
+                prof["sleep"] += time.perf_counter() - t0
             print("WARNING: _navigate_to_match timed out; continuing anyway")
         finally:
             if resume:
                 resume()
+            total = time.perf_counter() - t_start
+            if self.profile_every and total > 0.5:
+                print(f"[navigate] {total:5.1f}s | {prof['polls']} polls, "
+                      f"{prof['taps']} taps | grab {prof['grab']:.1f}s "
+                      f"classify {prof['classify']:.1f}s sleep {prof['sleep']:.1f}s")
 
     def _gate_weapons(self, action):
         """Suppress shots that provably cannot do anything.
@@ -483,7 +532,8 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
                                      frame_size=self.frame_size,
                                      planner=self.path_planner,
                                      terrain=self._terrain,
-                                     camera_delta=self._camera_delta)  # 1) act
+                                     camera_delta=self._camera_delta,
+                                     gas_grid=self._gas_grid_now)  # 1) act
         self._prof["act"] += time.perf_counter() - t0
 
         self._prev_action = intent.raw
@@ -523,7 +573,19 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
             "waypoint_blocked": status.blocked,
             "camera_delta": self._camera_delta,
             "velocity": self._velocity,
+            "planner_mode": status.mode,
+            "escaping_gas": status.escaping_gas,
         }
+
+        # Trace AFTER the decision has been made and scored, so the annotated
+        # frame shows the route that was actually taken and the reward it
+        # earned — the two things you need side by side to attribute a bad
+        # decision. The frame is the one perception ran on this step, i.e. the
+        # one the policy will condition on next.
+        if self.tracer is not None and self.tracer.due():
+            self.tracer.capture(self._last_frame, self.path_planner, state,
+                                intent=intent, reward=result, tick=self._tick)
+
         self._prof["total"] += time.perf_counter() - t_step
         self._prof["n"] += 1
         if self.profile_every and self._prof["n"] >= self.profile_every:
@@ -546,7 +608,8 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
                                      frame_size=self.frame_size,
                                      planner=self.path_planner,
                                      terrain=self._terrain,
-                                     camera_delta=(0.0, 0.0))
+                                     camera_delta=(0.0, 0.0),
+                                     gas_grid=None)
         if intent.move != (0.0, 0.0):
             self._last_move_t = time.time()
         self._pace()
@@ -586,6 +649,8 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
     def close(self):
         if self.source is not None:
             self.source.close()
+        if self.tracer is not None:
+            self.tracer.close()
         self.executor.close()
 
     # ------------------------------------------------------------------ #
@@ -649,6 +714,10 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
             if getattr(self.source, "live", False):
                 return GameState(tick=self._tick)
             return GameState(tick=self._tick, match_over=True)
+        if self.tracer is not None:
+            # Kept only when tracing: the tracer draws on the frame perception
+            # just ran on, and holding a reference costs nothing until then.
+            self._last_frame = frame
         t0 = time.perf_counter()
         live, _timings = self.perception.tick(frame)
         self._prof["perceive"] += time.perf_counter() - t0
@@ -683,6 +752,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         # single largest saving available without touching perception.
         if state.player_pos is None:
             self._terrain = None
+            self._gas_grid_now = None
         else:
             # find_terrain returns None when no map profile matches the frame.
             # That means "no terrain information", NOT "everything is blocked" —
@@ -694,14 +764,25 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
             except Exception:
                 self._terrain = None
 
-            # Gas rides along inside the terrain dict, on the same grid, so A*
-            # can add it straight into the cost map. Routing around the cloud is
-            # handled here rather than by a reward term: it needs no samples to
-            # learn, works from the very first frame, and — because it is a cost
-            # and not a wall — still lets the agent cut through gas when that is
-            # the only way out.
+            # GAS IS COMPUTED INDEPENDENTLY OF TERRAIN, and that is the point.
+            # It used to live inside the `if terrain is not None` branch, so on
+            # any map without a colour profile — or any frame where selection
+            # failed — the planner had NO spatial gas at all and steered by a
+            # single centroid vector that points the wrong way once the cloud
+            # closes into a ring. But gas needs no profile: it is an engine
+            # overlay drawn identically on every map (see perception/getGas.py),
+            # and `play_rect` finds the panel from the letterbox alone. So the
+            # geometry and the gas are always available even when the walls are
+            # not, and the planner is told so separately.
+            rect_now = (self._terrain["rect"] if self._terrain
+                        else self._safe_play_rect(frame))
+            self._gas_grid_now = self._gas_for(frame, rect_now, (GRID_W, GRID_H))
             if self._terrain is not None:
-                self._terrain["gas"] = self._gas_for(frame, self._terrain)
+                self._terrain["gas"] = self._gas_grid_now
+            elif rect_now is not None:
+                # No walls, but geometry + gas are real: give the planner's map
+                # enough to register the cloud against.
+                self.path_planner.world.set_geometry(rect_now, (GRID_W, GRID_H))
 
         rect = (self._terrain["rect"] if self._terrain
                 else self._last_rect)   # keep the camera crop stable across skips
@@ -724,55 +805,41 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
             self._velocity = (-self._camera_delta[0], -self._camera_delta[1])
         self._prev_player_pos = state.player_pos
 
-    def _gas_for(self, frame, terrain):
-        """Gas grid for this terrain, recomputed at most every N steps.
+    def _safe_play_rect(self, frame):
+        try:
+            return play_rect(frame)
+        except Exception:
+            return self._last_rect
 
-        Between refreshes the cached grid is ROLLED by the camera delta, so it
-        stays registered to the world while the view scrolls. Gas itself
-        expands over seconds, so age costs almost nothing; misalignment would
-        cost a lot, and that is the part we correct exactly.
+    def _gas_for(self, frame, rect, grid_size):
+        """Gas grid over `rect`, recomputed at most every N steps.
 
-        Sub-cell motion is accumulated in `_gas_drift` and only applied once it
-        reaches a whole cell, so slow scrolling is not silently discarded.
+        `gas_info`'s mask is the single most expensive thing this env does
+        (~3ms, more than the entire perception tick), but gas expands over
+        SECONDS, so a grid a few steps old is still accurate. Only its
+        ALIGNMENT goes stale quickly, because the world scrolls underneath.
+
+        Registration used to be handled here, by rolling the cached grid and
+        filling the newly exposed edge with ZERO — i.e. asserting "no gas" for
+        ground we had simply not looked at yet, which is how the agent kept
+        walking back into clouds it had just escaped. Registration and memory
+        both now live in `rl/world_map.WorldMap`, which fuses gas over time and
+        never invents a clean reading. This function's only remaining job is
+        rate-limiting the detector, so between refreshes it returns None and
+        the world map keeps what it already knows.
         """
-        gh, gw = terrain["occupancy"].shape
-        cw, ch = terrain["cell"]
-
-        fresh = (self._gas_grid is None
-                 or self._gas_grid.shape != (gh, gw)
-                 or self._gas_age >= _GAS_REFRESH_STEPS)
-        if fresh:
-            try:
-                self._gas_grid = gas_info(frame, grid_rect=terrain["rect"],
-                                          grid_size=(gw, gh))["grid"]
-            except Exception:
-                self._gas_grid = None
-            self._gas_age = 0
-            self._gas_drift = [0.0, 0.0]
-            return self._gas_grid
-
-        self._gas_age += 1
-        if self._gas_grid is None:
+        if rect is None:
             return None
-
-        self._gas_drift[0] += self._camera_delta[0] / max(cw, 1e-6)
-        self._gas_drift[1] += self._camera_delta[1] / max(ch, 1e-6)
-        sx, sy = int(self._gas_drift[0]), int(self._gas_drift[1])
-        if sx or sy:
-            # Newly exposed edges have never been observed; fill them with 0
-            # (no known gas) rather than wrapping the opposite edge round.
-            self._gas_grid = np.roll(self._gas_grid, (sy, sx), axis=(0, 1))
-            if sx > 0:
-                self._gas_grid[:, :sx] = 0.0
-            elif sx < 0:
-                self._gas_grid[:, sx:] = 0.0
-            if sy > 0:
-                self._gas_grid[:sy, :] = 0.0
-            elif sy < 0:
-                self._gas_grid[sy:, :] = 0.0
-            self._gas_drift[0] -= sx
-            self._gas_drift[1] -= sy
-        return self._gas_grid
+        gw, gh = int(grid_size[0]), int(grid_size[1])
+        if self._gas_age > 0 and self._gas_age < _GAS_REFRESH_STEPS:
+            self._gas_age += 1
+            return None
+        try:
+            grid = gas_info(frame, grid_rect=rect, grid_size=(gw, gh))["grid"]
+        except Exception:
+            grid = None
+        self._gas_age = 1
+        return grid
 
     def _encode(self, state: GameState) -> np.ndarray:
         max_hp = self.reward_calc._max_health or self.reward_calc.config.default_max_health

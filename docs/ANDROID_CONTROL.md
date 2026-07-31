@@ -1,4 +1,4 @@
-# Connecting a physical Android phone (Pixel 10) — turning intent into real movement
+# Connecting a physical Android phone (Pixel 10) 
 
 This is the "hands" of the bot. The policy outputs a **player-centred waypoint**
 plus attack/super flags. `rl/path_planner.py` converts the waypoint into the next
@@ -12,11 +12,12 @@ Two channels to set up: **input** (sending taps/swipes) and **capture** (getting
 frames back for perception). Both run over the same USB `adb` connection to the
 Pixel — no emulator required.
 
-> **Use normal ADB for v4 control.** Your phone blocks raw `sendevent` input, and
-> the PyPI `scrcpy-client` package bundles a server too old for the phone. It is
-> therefore optional and deliberately not installed by `requirements.txt`.
-> The waypoint controller reduces policy-level direction jitter, but ADB itself
-> still cannot hold the game joystick continuously between commands.
+> **Use normal ADB for v4 control.** Pixel 10 or Newest Android versions
+> blocks raw `sendevent` input, and the PyPI `scrcpy-client` package bundles 
+> a server too old for the phone. It is therefore optional and deliberately 
+> not installed by `requirements.txt`. The waypoint controller reduces policy-level 
+> direction jitter, but ADB itself still cannot hold the game joystick continuously
+> between commands.
 
 > You may install the current official `scrcpy` desktop app for manually mirroring
 > the phone or faster window capture. Do not use v4's `--scrcpy` Python backend:
@@ -43,13 +44,13 @@ either way — only the frame source changes.
 1. On the phone: **Settings → About phone →** tap **Build number** 7× to unlock
    Developer options.
 2. **Settings → System → Developer options →** enable **USB debugging**.
-3. Plug the Pixel into your computer with USB. Tap **Allow** on the "Allow USB
+3. Plug the Pixel into the computer with USB. Tap **Allow** on the "Allow USB
    debugging?" prompt (check "always allow from this computer").
 4. Verify:
    ```bash
    adb devices
    # List of devices attached
-   # 4A1B2C3D        device        <- your Pixel's serial
+   # 4A1B2C3D        device        <- your device's serial
    ```
    If it says `unauthorized`, re-accept the prompt on the phone. If nothing shows,
    try a different cable/port (some cables are charge-only).

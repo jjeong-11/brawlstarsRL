@@ -170,6 +170,16 @@ def load_frames(args):
         return out
 
     path = args.video or str(_ROOT / "media" / "testvideos" / "test_game2.mp4")
+    if not pathlib.Path(path).exists():
+        # Recordings are gitignored (too large for GitHub), so a fresh clone
+        # will not have the default. Every other input works without them.
+        raise SystemExit(
+            f"{path} is not present — gameplay recordings are not committed "
+            f"(see .gitignore).\n\n"
+            f"  python scripts/check_perception.py --image your_screenshot.png\n"
+            f"  python scripts/check_perception.py --serial <SERIAL>   "
+            f"# straight from the phone\n"
+            f"  python scripts/check_perception.py --video path/to/your_clip.mp4")
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise SystemExit(f"could not open {path}")

@@ -8,9 +8,55 @@ venv/
 # OS
 .DS_Store
 
-# Runtime / model output
-debugOutput/live_preview.png
-brawlstars_ppo.zip
+# --- Large media -----------------------------------------------------------
+# Gameplay recordings: 612MB, and two of them are over GitHub's 100MB HARD
+# per-file limit, so they cannot be pushed at all without Git LFS.
+#
+# Nothing at runtime needs them. They are development inputs for the offline
+# smoke test (scripts/train_rl.py with no --live) and for
+# scripts/check_perception.py; both take --video / --image and say so when the
+# default is missing. Keep your copies locally.
+media/testvideos/
+*.mp4
+*.mkv
+*.mov
+
+# Annotated frames written at runtime, regenerated on every debug run (~42MB).
+debugOutput/
+
+# --- Model output ----------------------------------------------------------
+brawlstars_ppo*.zip
 checkpoints/
+checkpoints_*/
 tb_logs/
 *.tmp
+
+# --- KEPT ON PURPOSE, do not add these --------------------------------------
+# showdown.png                                calibration reference, and
+#                                             scripts/test_waypoint.py asserts on it
+# media/gasphotos/                            5 labelled gas fixtures, ditto
+# perception/*.npz                            digit templates, REQUIRED at runtime
+# perception/username_classifier_weights.json trained weights, also required
+# controls.example.json                       template for controls.json
+
+# --- Development datasets ---------------------------------------------------
+# Not needed to RUN the bot, only to RETRAIN via tools/. The trained artefacts
+# they produce (perception/digit_*.npz, username_classifier_weights.json) are
+# committed, so a fresh clone runs fine without these.
+#
+# Regenerating them needs gameplay recordings, which are not committed either:
+#   media/crops + training_data  <- tools/make_training_data.py,
+#                                   tools/harvest_digit_templates.py
+#   media/testphotos             <- manual screenshots
+#
+# NOTE: these three lines used to carry trailing `# ...` comments. Git only
+# treats `#` as a comment at the START of a line, so the comment text was part
+# of the pattern and all three directories were silently NOT ignored -- 229 of
+# the repo's 417 tracked files were development data nobody meant to commit.
+# Sizes now live above the patterns instead of beside them.
+#   media/crops/       17MB  username-classifier crops
+#   training_data/     20MB  username-classifier dataset
+#   media/testphotos/   9MB  manual calibration screenshots
+media/crops/
+training_data/
+media/testphotos/

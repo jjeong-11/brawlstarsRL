@@ -349,11 +349,20 @@ def test_gas_costs_but_does_not_wall():
 
     # Now wall the detour off so the ONLY route east is through the gas. The
     # agent must still be willing to go, or it would be trapped in an endgame.
-    boxed = world.terrain()
+    #
+    # The walls are REAL WALLS rather than "gas spanning the full viewport",
+    # which is what this used to be. Since the planner keeps a world map three
+    # screens wide, filling the visible column with gas no longer makes the
+    # detour impossible — A* correctly notices it can go around through ground
+    # it has not observed yet. To test "will it cross when it must", the
+    # crossing has to actually be forced, and only geometry can force it.
+    corridor = World([(0, 0, WORLD_W, WORLD_H // 2 - 3),
+                      (0, WORLD_H // 2 + 3, WORLD_W, WORLD_H)])
+    boxed = corridor.terrain()
     boxed["gas"] = np.zeros((GRID_H, GRID_W), np.float32)
-    boxed["gas"][:, 26:30] = 1.0          # gas spans the full height now
+    boxed["gas"][:, 26:30] = 1.0
     planner.reset()
-    forced = planner.plan(0, 2, st, (VIEW_W, VIEW_H), terrain=boxed)
+    forced = planner.plan(0, 2, _state(corridor), (VIEW_W, VIEW_H), terrain=boxed)
     assert forced[0] > 0.5, f"refused to cross unavoidable gas: {forced}"
     print(f"  detours around a gas band ({detour[1]:+.2f} vertical), "
           f"still crosses when unavoidable ({forced[0]:+.2f} east)")
@@ -376,6 +385,265 @@ def test_gas_destination_is_relocated():
     assert not (30 <= gx < 40 and 8 <= gy < 19), (
         f"waypoint latched inside the gas at cell ({gx}, {gy})")
     print(f"  raw target was inside the cloud; latched at cell ({gx}, {gy}) instead")
+    return True
+
+
+# --------------------------------------------------------------------- #
+# The three failure modes the planner was rewritten to fix. Each of these
+# fails against the pre-rewrite planner, which is the only thing that makes
+# them worth having.
+# --------------------------------------------------------------------- #
+def test_route_keeps_clear_of_walls():
+    """Routes run down the middle of a gap, not along the wall face.
+
+    A* for a dimensionless point takes the shortest legal line, which around an
+    outside corner is flush against it. The agent has width, so flush means
+    wedged. With the clearance cost, the route should stand off the wall.
+    """
+    # A wall with a wide doorway; the target is on the far side of it.
+    wall_x = WORLD_W // 2
+    walls = [(wall_x, 0, wall_x + 2, WORLD_H // 2 - 4),
+             (wall_x, WORLD_H // 2 + 4, wall_x + 2, WORLD_H)]
+    world = World(walls)
+    planner = WaypointPlanner()
+    terrain = world.terrain()
+    st = _state(world)
+
+    planner.plan(0, 2, st, (VIEW_W, VIEW_H), terrain=terrain)
+    w = planner.world
+    assert planner.path, "no path produced"
+    clear = w.clearance()
+    got = [float(clear[c[1], c[0]]) for c in planner.path]
+    cfg = PathPlannerConfig()
+    worst = min(got)
+    assert worst >= cfg.agent_radius_cells, (
+        f"route passes within {worst:.2f} cells of a wall, below the agent's "
+        f"{cfg.agent_radius_cells} half-width — this is what wedges it")
+    print(f"  min clearance along the route {worst:.2f} cells "
+          f"(agent half-width {cfg.agent_radius_cells})")
+    return True
+
+
+def test_narrow_gap_still_usable():
+    """Inflation must relax rather than seal a legitimate one-cell doorway.
+
+    A planner that refuses to move is worse than one that scrapes a wall, so
+    when the strict footprint disconnects the goal we retry without it.
+    """
+    wall_x = WORLD_W // 2
+    gap_y = WORLD_H // 2
+    walls = [(wall_x, 0, wall_x + 2, gap_y), (wall_x, gap_y + 1, wall_x + 2, WORLD_H)]
+    world = World(walls)
+    planner = WaypointPlanner()
+    move = planner.plan(0, 2, _state(world), (VIEW_W, VIEW_H), terrain=world.terrain())
+    assert move != (0.0, 0.0), "refused to move through a one-cell gap"
+    assert move[0] > 0.3, f"did not head toward the gap: {move}"
+    print(f"  one-cell doorway still traversed: move {move[0]:+.2f},{move[1]:+.2f}")
+    return True
+
+
+def test_map_remembers_terrain_that_scrolled_away():
+    """Walls stay on the map after the camera has scrolled them off screen.
+
+    Before the world map, occupancy was rebuilt per frame in screen space, so
+    a wall the agent had just walked past did not exist any more.
+    """
+    wall = [(WORLD_W // 2 - 20, WORLD_H // 2 - 2, WORLD_W // 2 - 14, WORLD_H // 2 + 2)]
+    world = World(wall)
+    planner = WaypointPlanner()
+
+    camera = (0.0, 0.0)
+    seen_blocked = 0
+    for _ in range(3):                       # observe it a few times
+        planner.plan(8, 0, _state(world), (VIEW_W, VIEW_H),
+                     terrain=world.terrain(), camera_delta=camera)
+        camera = world.move((0.0, 0.0))
+    w = planner.world
+    seen_blocked = int(w.occupancy.sum())
+    assert seen_blocked > 0, "never registered the wall at all"
+
+    # Walk east until the wall is well behind us, feeding real camera deltas.
+    for _ in range(30):
+        camera = world.move((1.0, 0.0))
+        planner.plan(0, 0, _state(world), (VIEW_W, VIEW_H),
+                     terrain=world.terrain(), camera_delta=camera)
+
+    still = int(planner.world.occupancy.sum())
+    assert still > 0, "forgot every wall once it scrolled off screen"
+    print(f"  {still} blocked cells retained after the wall scrolled out of view "
+          f"(observed {seen_blocked})")
+    return True
+
+
+def test_gas_ring_escape_goes_inward():
+    """THE BUG THIS PLANNER EXISTS TO FIX.
+
+    Showdown's cloud closes inward as a RING. `getGas.safe_vector` is
+    `player - gas_centroid`, and the centroid of a ring is the middle of the
+    SAFE ZONE — so that vector points OUTWARD, deeper into the gas, exactly
+    when the ring has closed enough for it to matter. It also overrode the
+    entire A* plan whenever `in_gas` was set.
+
+    Here the player sits in the ring's inner wall, north of centre. The correct
+    escape is SOUTH (inward, toward the clear middle). The old centroid vector
+    would say NORTH.
+    """
+    world = World()
+    planner = WaypointPlanner()
+
+    # An annular cloud: everything outside a central disc is gas.
+    yy, xx = np.mgrid[0:GRID_H, 0:GRID_W]
+    cx, cy = GRID_W / 2.0, GRID_H / 2.0
+    r = np.hypot(xx - cx, yy - cy)
+    gas = (r > 6.0).astype(np.float32)
+
+    terrain = world.terrain()
+    terrain["gas"] = gas
+
+    # Sanity: the centroid of this ring really is the safe centre, so the old
+    # heuristic really would point the wrong way. Assert it, so this test
+    # documents the bug rather than merely avoiding it.
+    ys, xs = np.nonzero(gas)
+    centroid = (xs.mean(), ys.mean())
+    assert abs(centroid[0] - cx) < 1.5 and abs(centroid[1] - cy) < 1.5, (
+        "test setup wrong: the ring's centroid should sit at the safe centre")
+
+    # Player one cell inside the cloud's inner edge, NORTH of the centre.
+    px = int(VIEW_W / 2)
+    py = int((cy - 6.5) * CELL)
+    st = GameState(player_pos=(px, py), health=8000, in_gas=True,
+                   gas_safe=(0.0, -1.0))       # what the old code would say
+    for _ in range(2):
+        move = planner.plan(0, 0, st, (VIEW_W, VIEW_H), terrain=terrain)
+
+    assert planner.status().escaping_gas, "did not recognise it was in gas"
+    assert move[1] > 0.25, (
+        f"escaped NORTH, i.e. outward into the ring, exactly the old "
+        f"centroid bug: {move}")
+    print(f"  ring cloud: escaped inward (dy {move[1]:+.2f}) rather than "
+          f"outward toward the centroid")
+    return True
+
+
+def test_gas_is_remembered_after_scrolling():
+    """Gas that scrolls off screen is not silently relabelled clean.
+
+    The old cached grid was rolled by the camera delta and its newly exposed
+    edge filled with ZERO, so ground the agent had just fled came back into
+    view looking safe.
+    """
+    world = World()
+    planner = WaypointPlanner()
+
+    gas = np.zeros((GRID_H, GRID_W), np.float32)
+    gas[:, 0:8] = 1.0                       # a cloud to the WEST
+    terrain = world.terrain()
+    terrain["gas"] = gas
+
+    camera = (0.0, 0.0)
+    for _ in range(3):
+        planner.plan(0, 0, _state(world), (VIEW_W, VIEW_H),
+                     terrain=terrain, camera_delta=camera)
+        camera = world.move((0.0, 0.0))
+    remembered_before = float(planner.world.gas.max())
+
+    # Walk east until that cloud is off screen; the frames no longer show it.
+    clean = world.terrain()
+    clean["gas"] = np.zeros((GRID_H, GRID_W), np.float32)
+    for _ in range(25):
+        camera = world.move((1.0, 0.0))
+        planner.plan(0, 0, _state(world), (VIEW_W, VIEW_H),
+                     terrain=clean, camera_delta=camera)
+
+    still = float(planner.world.gas.max())
+    assert still > 0.3 * remembered_before, (
+        f"gas memory decayed to {still:.2f} from {remembered_before:.2f} once "
+        f"it left the view — the agent would walk straight back into it")
+    print(f"  cloud still remembered at {still:.2f} coverage after scrolling "
+          f"off screen (was {remembered_before:.2f})")
+    return True
+
+
+def test_hud_occluded_cells_get_filled_in():
+    """Ground hidden behind the HUD is resolved from later frames, not guessed.
+
+    ~20% of the play area sits under the joystick and buttons and is marked
+    `unknown` every frame. Per-frame, those cells could never be resolved. With
+    the world map they fill in as the camera scrolls them out from under the
+    HUD — as long as unknown cells are SKIPPED rather than fused as free.
+    """
+    # A block off to the EAST — clear of the player, who starts at the centre.
+    world = World([(WORLD_W // 2 + 20, WORLD_H // 2 - 6,
+                    WORLD_W // 2 + 26, WORLD_H // 2 + 6)])
+    planner = WaypointPlanner()
+
+    def occluded_terrain():
+        t = world.terrain()
+        unknown = np.zeros((GRID_H, GRID_W), bool)
+        unknown[16:, :14] = True            # a joystick-shaped hole
+        t["unknown"] = unknown
+        return t
+
+    camera = (0.0, 0.0)
+    planner.plan(0, 0, _state(world), (VIEW_W, VIEW_H),
+                 terrain=occluded_terrain(), camera_delta=camera)
+    w = planner.world
+    # A FIXED SLICE OF THE MAP, i.e. fixed ground. Measuring the same SCREEN
+    # region later would measure whatever is under the joystick now, which is
+    # occluded by construction — the question is whether the ground that
+    # started under it ever gets resolved.
+    ox, oy = int(round(w.origin[0])), int(round(w.origin[1]))
+    hole = (slice(oy + 16, oy + GRID_H), slice(ox, ox + 14))
+    unseen_first = float((w.seen[hole] < 0.15).mean())
+
+    # Walk WEST. The joystick sits bottom-LEFT, so westward motion slides the
+    # ground under it rightwards and out from beneath the button. Walking east
+    # would push that same ground further behind the camera, where it is never
+    # seen at all — which is a real property of the fix, not a quirk of the
+    # test: occluded ground is resolved by scrolling it out, not by waiting.
+    for _ in range(20):
+        camera = world.move((-1.0, 0.0))
+        planner.plan(8, 0, _state(world), (VIEW_W, VIEW_H),
+                     terrain=occluded_terrain(), camera_delta=camera)
+
+    unseen_after = float((planner.world.seen[hole] < 0.15).mean())
+    assert unseen_first > 0.9, "test setup: the hole should start unobserved"
+    assert unseen_after < 0.5, (
+        f"{100 * unseen_after:.0f}% of the HUD-occluded region is still "
+        f"unobserved after 20 steps of scrolling — it is never being filled in")
+    print(f"  HUD-occluded region: {100 * unseen_first:.0f}% unobserved at first, "
+          f"{100 * unseen_after:.0f}% after scrolling")
+    return True
+
+
+def test_gas_not_gated_behind_a_terrain_profile():
+    """Gas still reaches the planner when NO terrain profile matched.
+
+    `find_terrain` returns None on an uncalibrated map, and gas used to be
+    computed inside that same branch — so on any map without a colour profile
+    the planner had no spatial gas at all. Gas detection is map-independent, so
+    it must not be gated behind terrain.
+    """
+    planner = WaypointPlanner()
+    rect = (0, 0, VIEW_W, VIEW_H)
+    planner.world.set_geometry(rect, (GRID_W, GRID_H))
+
+    # A blob to the east that leaves a clear corridor along the bottom, so a
+    # detour genuinely exists — same shape as the with-terrain gas test.
+    gas = np.zeros((GRID_H, GRID_W), np.float32)
+    gas[0:20, 26:32] = 1.0
+    st = GameState(player_pos=(int(VIEW_W / 2), int(VIEW_H / 2)), health=8000)
+
+    for _ in range(3):
+        move = planner.plan(0, 2, st, (VIEW_W, VIEW_H), terrain=None, gas_grid=gas)
+
+    assert float(planner.world.gas.max()) > 0.5, (
+        "gas never reached the planner without a terrain profile")
+    assert move[1] > 0.15, (
+        f"walked straight east into the cloud with no terrain profile "
+        f"instead of detouring below it: {move}")
+    print(f"  no terrain profile, gas still routed around: "
+          f"move {move[0]:+.2f},{move[1]:+.2f}")
     return True
 
 
@@ -827,6 +1095,223 @@ def test_cube_counter_not_gated_on_verified_anchor():
     return True
 
 
+def _destination_openness(terrain, player_px, cfg):
+    """Mean openness of every heading/distance destination from one spot."""
+    from perception.getTerrain import to_grid
+    from rl.path_planner import _openness
+
+    occ = terrain["occupancy"]
+    gh, gw = occ.shape
+    rect, cell = terrain["rect"], terrain["cell"]
+    field = _openness(occ, cfg.openness_radius)
+    st = GameState(player_pos=(int(player_px[0]), int(player_px[1])))
+    vals = []
+    for h in range(cfg.n_headings):
+        for d in range(len(cfg.distances)):
+            planner = WaypointPlanner(cfg)
+            planner.plan(h, d, st, (rect[2], rect[3]), terrain=terrain)
+            gx, gy = to_grid(planner.waypoint, rect, cell)
+            vals.append(field[int(np.clip(gy, 0, gh - 1)), int(np.clip(gx, 0, gw - 1))])
+    return float(np.mean(vals)), float(np.mean([v < 0.35 for v in vals]))
+
+
+def test_destinations_avoid_the_border():
+    """Destinations must not pile up in closed-in ground.
+
+    The zone in Showdown closes inward, so the map edge is where gas arrives
+    FIRST — parking there is how the agent ends up dying in the smoke. The
+    planner steered straight at it: a heading pointing off-map was relocated to
+    the nearest legal cell, which is the border ring.
+
+    NOTE what is and is not asserted. The grid's outer ring is the SCREEN edge,
+    not the map border — mid-map they are unrelated, and penalising the screen
+    edge would block most long-range movement. The real signal is openness:
+    out-of-bounds decoration segments as unwalkable, so surrounding blocked area
+    is what actually indicates a map edge. So this compares openness of chosen
+    destinations against the same planner with the border terms switched off.
+    """
+    import cv2
+    from dataclasses import replace
+    from perception.getTerrain import find_terrain, ProfileSelector
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    img = cv2.imread(str(root / "showdown.png"))
+    if img is None:
+        print("  SKIP (showdown.png not found)")
+        return True
+    terrain = find_terrain(img, selector=ProfileSelector())
+    assert terrain is not None
+
+    on = PathPlannerConfig()
+    off = replace(on, border_cost=0.0, min_destination_openness=0.0)
+    rect = terrain["rect"]
+
+    improved = 0
+    for fx, fy in ((0.5, 0.5), (0.15, 0.5), (0.5, 0.18), (0.85, 0.5)):
+        p = (rect[0] + rect[2] * fx, rect[1] + rect[3] * fy)
+        mean_off, closed_off = _destination_openness(terrain, p, off)
+        mean_on, closed_on = _destination_openness(terrain, p, on)
+        assert mean_on >= mean_off - 1e-6, (
+            f"at ({fx},{fy}) the border terms made destinations LESS open: "
+            f"{mean_on:.3f} vs {mean_off:.3f}")
+        assert closed_on <= closed_off + 1e-6, (
+            f"at ({fx},{fy}) more destinations landed in closed ground with "
+            f"the border terms on: {closed_on:.2f} vs {closed_off:.2f}")
+        improved += mean_on > mean_off + 0.005
+    assert improved >= 2, (
+        f"the border terms changed nothing at {4 - improved}/4 positions")
+    print(f"  destination openness improved at {improved}/4 positions, "
+          f"never worse")
+    return True
+
+
+def test_destinations_stay_off_a_hard_border():
+    """With an explicit out-of-bounds ring, destinations must keep clear of it.
+
+    The real-frame test above is a relative comparison; this one is absolute,
+    on a synthetic map whose border is unambiguous.
+    """
+    walls = []
+    world = World(walls)
+    # Ring the visible area in out-of-bounds decoration.
+    terrain = world.terrain()
+    occ = terrain["occupancy"]
+    occ[:4, :] = True
+    occ[-4:, :] = True
+    occ[:, :4] = True
+    occ[:, -4:] = True
+    terrain["walkable"] = (~occ).astype(np.float32)
+
+    from perception.getTerrain import to_grid
+    cfg = PathPlannerConfig()
+    st = GameState(player_pos=(int(VIEW_W / 2), int(VIEW_H / 2)))
+    in_border = 0
+    total = 0
+    for h in range(cfg.n_headings):
+        for d in range(len(cfg.distances)):
+            planner = WaypointPlanner()
+            planner.plan(h, d, st, (VIEW_W, VIEW_H), terrain=terrain)
+            gx, gy = to_grid(planner.waypoint, terrain["rect"], terrain["cell"])
+            gx = int(np.clip(gx, 0, GRID_W - 1))
+            gy = int(np.clip(gy, 0, GRID_H - 1))
+            in_border += bool(occ[gy, gx]) or gx < 5 or gy < 5 or \
+                gx >= GRID_W - 5 or gy >= GRID_H - 5
+            total += 1
+    frac = in_border / total
+    assert frac < 0.25, (
+        f"{100 * frac:.0f}% of destinations landed in or against the "
+        f"out-of-bounds ring")
+    print(f"  {100 * frac:.0f}% of destinations in/against a hard border ring")
+    return True
+
+
+def test_gas_is_anticipated():
+    """Ground next to gas must already be expensive, not merely gas itself.
+
+    The zone only shrinks, so a clear cell beside the cloud is not neutral
+    ground — it is ground that is about to be gas. Costing only the visible
+    cloud means reacting once it is on top of the agent, which in the endgame
+    is too late to walk out of.
+    """
+    world = World()
+    planner = WaypointPlanner()
+    cfg = PathPlannerConfig()
+    terrain = world.terrain()
+
+    gas = np.zeros((GRID_H, GRID_W), np.float32)
+    gas[:, 30:34] = 1.0                      # a band to the east
+    terrain["gas"] = gas
+
+    # The cost grid now lives on the planner's persistent world map rather than
+    # on the per-frame terrain dict, so fuse a frame first and index through the
+    # map's origin. `ox`/`oy` are where the current viewport sits on the map.
+    planner.plan(0, 1, _state(world), (VIEW_W, VIEW_H), terrain=terrain)
+    w = planner.world
+    ox, oy = int(round(w.origin[0])), int(round(w.origin[1]))
+    cost = planner._cost_grid([], VIEW_H)
+    row = oy + GRID_H // 2
+    band = cost[row, ox + 30:ox + 34].mean()
+    edge = cost[row, ox + 30 - cfg.gas_dilate_cells:ox + 30].mean()
+    far = cost[row, ox + 5:ox + 10].mean()
+
+    assert band > far * 2, f"gas band ({band:.1f}) not costed above open ground ({far:.1f})"
+    assert edge > far * 1.5, (
+        f"cells within {cfg.gas_dilate_cells} of the cloud cost {edge:.1f} vs "
+        f"{far:.1f} for open ground — the cloud's advance is not anticipated")
+    print(f"  open {far:.1f} | within {cfg.gas_dilate_cells} cells of gas "
+          f"{edge:.1f} | in gas {band:.1f}")
+    return True
+
+
+def test_navigate_polls_fast_taps_slowly():
+    """Between-match navigation must notice transitions fast without spamming taps.
+
+    Measured on a phone, resets cost 24.2s and 71% of wall clock, almost all of
+    it sleeping: the loop tapped and then slept 1.0-1.2s, so every screen change
+    was noticed up to 1.2s late. Polling and tapping are now separate rates.
+
+    Driven by a fake device whose screen advances on a wall-clock schedule, so
+    the test measures the loop's responsiveness rather than a real phone's.
+    """
+    import time as _time
+    from rl.env import BrawlStarsEnv
+    from rl.actions import LoggingExecutor
+
+    # Screen timeline: defeated for 1.0s, match_end for 1.0s, then in_match.
+    class FakeSource:
+        live = True
+        def __init__(self):
+            self.t0 = _time.time()
+            self.grabs = 0
+        def screen(self):
+            dt = _time.time() - self.t0
+            return "defeated" if dt < 1.0 else ("match_end" if dt < 2.0 else "in_match")
+        def grab(self):
+            self.grabs += 1
+            return np.zeros((16, 16, 3), np.uint8)
+        def close(self):
+            pass
+
+    src = FakeSource()
+    taps = []
+
+    class TapRecorder(LoggingExecutor):
+        def tap_norm(self, fx, fy):
+            taps.append((_time.time(), fx, fy))
+
+    env = BrawlStarsEnv(source_factory=lambda: src, executor=TapRecorder())
+    env.source = src          # normally set by reset(); we call navigate directly
+    import rl.env as E
+    real_state = E.get_game_state
+    E.get_game_state = lambda frame: {"state": src.screen()}
+    try:
+        t0 = _time.time()
+        env._navigate_to_match()
+        elapsed = _time.time() - t0
+    finally:
+        E.get_game_state = real_state
+        env.close()
+
+    # It must not overshoot the 2.0s scripted timeline by much.
+    assert elapsed < 2.9, (
+        f"navigation took {elapsed:.2f}s for a 2.0s timeline — it is "
+        f"oversleeping past transitions")
+    # And it must have tapped both buttons, but not machine-gunned either.
+    assert len(taps) >= 2, f"only {len(taps)} tap(s); both menus need one"
+    assert len(taps) <= 6, (
+        f"{len(taps)} taps in {elapsed:.1f}s — fast polling is being turned "
+        f"into a burst of taps, which can activate whatever is underneath")
+    gaps = [b[0] - a[0] for a, b in zip(taps, taps[1:])
+            if abs(b[1] - a[1]) < 1e-9]          # consecutive taps, same button
+    for g in gaps:
+        assert g >= BrawlStarsEnv.NAVIGATE_TAP_INTERVAL - 0.05, (
+            f"two taps on the same button {g:.2f}s apart, under the "
+            f"{BrawlStarsEnv.NAVIGATE_TAP_INTERVAL}s minimum")
+    print(f"  2.0s timeline cleared in {elapsed:.2f}s with {len(taps)} taps "
+          f"({src.grabs} polls)")
+    return True
+
+
 def test_hold_ms_fits_the_tick():
     """A movement swipe must fit inside one tick, or swipes queue.
 
@@ -898,6 +1383,10 @@ TESTS = [
     ("action space matches planner", test_action_space_matches_planner),
     ("commitments fixed in seconds", test_commitments_are_fixed_in_seconds),
     ("swipe duration fits the tick", test_hold_ms_fits_the_tick),
+    ("menu navigation is poll-driven", test_navigate_polls_fast_taps_slowly),
+    ("destinations avoid the map border", test_destinations_avoid_the_border),
+    ("destinations stay off a hard border", test_destinations_stay_off_a_hard_border),
+    ("gas is costed before it arrives", test_gas_is_anticipated),
     ("perception survives no anchor", test_perception_survives_no_anchor),
     ("boxes interrupt a commitment", test_boxes_interrupt_a_commitment),
     ("cube counter not gated on verified anchor", test_cube_counter_not_gated_on_verified_anchor),
@@ -916,6 +1405,14 @@ TESTS = [
     ("gas overrides a commitment", test_gas_overrides),
     ("gas costs but does not wall", test_gas_costs_but_does_not_wall),
     ("gas destination is relocated", test_gas_destination_is_relocated),
+    # --- the three rewritten failure modes --- #
+    ("routes keep clear of walls", test_route_keeps_clear_of_walls),
+    ("narrow gap still usable", test_narrow_gap_still_usable),
+    ("map remembers terrain that scrolled away", test_map_remembers_terrain_that_scrolled_away),
+    ("HUD-occluded cells get filled in", test_hud_occluded_cells_get_filled_in),
+    ("gas ring escape goes INWARD", test_gas_ring_escape_goes_inward),
+    ("gas is remembered after scrolling", test_gas_is_remembered_after_scrolling),
+    ("gas is not gated behind a terrain profile", test_gas_not_gated_behind_a_terrain_profile),
     ("box shaping rewards approach", test_box_shaping_rewards_approach),
     ("box shaping cannot be farmed", test_box_shaping_cannot_be_farmed),
     ("box shaping survives pickup", test_box_shaping_survives_pickup),

@@ -83,6 +83,14 @@ class TerrainProfile:
 # Bounds are measured percentiles widened by roughly +-4 hue / +-25 sat to
 # absorb lighting variation between maps of the same theme.
 
+#this was added for the map: GatedCommunity on 7/27/2026
+GATEDCOMMUNITY = TerrainProfile(
+    name='GatedCommunity',
+    floor=(np.array([np.int64(134), np.int64(42), np.int64(24)]), np.array([np.int64(147), np.int64(136), np.int64(139)])),
+    wall=(np.array([np.int64(111), np.int64(50), np.int64(123)]), np.array([np.int64(125), np.int64(147), np.int64(238)])),
+    bush=(np.array([np.int64(88), np.int64(188), np.int64(91)]), np.array([np.int64(101), np.int64(255), np.int64(228)])),
+)
+
 NIGHT_TEAL = TerrainProfile(
     name="night_teal",
     floor=(np.array([123, 100, 55]), np.array([130, 135, 100])),
@@ -134,7 +142,7 @@ MAGENTA_CRATE = TerrainProfile(
           "Floor/wall split by HUE across a narrow gap at ~151.",
 )
 
-PROFILES = (NIGHT_TEAL, PURPLE_STONE, MAGENTA_CRATE, GRAVEYARD, STARR_RAIL)
+PROFILES = (NIGHT_TEAL, PURPLE_STONE, MAGENTA_CRATE, GRAVEYARD, STARR_RAIL, GATEDCOMMUNITY)
 
 # Fraction of the play area a profile must classify to be trusted. Below this
 # we return no grid rather than a mostly-solid fantasy. Real matches on a

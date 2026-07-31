@@ -85,12 +85,17 @@ class Intent:
 
 def decode_action(action, state=None, frame_size=(1280, 720),
                   planner: Optional[WaypointPlanner] = None,
-                  terrain=None, camera_delta=(0.0, 0.0)) -> Intent:
+                  terrain=None, camera_delta=(0.0, 0.0), gas_grid=None) -> Intent:
     """Decode ``[heading, distance, attack, super]`` into an Intent.
 
-    `terrain` and `camera_delta` come from the env's per-tick perception; when
-    omitted the planner degrades to direct steering with no world latching,
-    which is fine for unit tests but not for real play.
+    `terrain`, `gas_grid` and `camera_delta` come from the env's per-tick
+    perception; when omitted the planner degrades to direct steering with no
+    world latching, which is fine for unit tests but not for real play.
+
+    `gas_grid` is passed separately from `terrain` on purpose: gas detection is
+    map-independent (it is an engine overlay, not map art) while terrain needs a
+    matching colour profile, so on an uncalibrated map gas is available when
+    terrain is not. Folding it into `terrain` would throw that away.
     """
     if not hasattr(action, "__len__") or len(action) < 4:
         raise ValueError("expected polar action [heading, distance, attack, super]")
@@ -100,12 +105,14 @@ def decode_action(action, state=None, frame_size=(1280, 720),
     dist = max(0, min(N_DISTANCES - 1, dist))
 
     planner = planner or WaypointPlanner()
-    move = planner.plan(heading, dist, state, frame_size,
-                        terrain=terrain, camera_delta=camera_delta)
+    move = planner.plan(heading, dist, state, frame_size, terrain=terrain,
+                        camera_delta=camera_delta, gas_grid=gas_grid)
 
     status = planner.status()
     label = f"{_COMPASS[heading]}/{_DIST_LABEL[dist]}"
-    if status.active and not status.replanned:
+    if status.escaping_gas:
+        label += "(GAS-ESCAPE)"     # the plan was overridden to flee the cloud
+    elif status.active and not status.replanned:
         label += "(committed)"      # the heads above were ignored this step
     if status.blocked:
         label += "(blocked)"
@@ -116,10 +123,10 @@ class ActionExecutor:
     """Interface: consume an action, drive the device."""
 
     def apply(self, action, state=None, frame_size=(1280, 720), planner=None,
-              terrain=None, camera_delta=(0.0, 0.0)) -> Intent:
+              terrain=None, camera_delta=(0.0, 0.0), gas_grid=None) -> Intent:
         intent = decode_action(action, state=state, frame_size=frame_size,
                                planner=planner, terrain=terrain,
-                               camera_delta=camera_delta)
+                               camera_delta=camera_delta, gas_grid=gas_grid)
         self._execute(intent)
         return intent
 
