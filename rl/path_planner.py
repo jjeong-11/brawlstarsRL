@@ -727,9 +727,24 @@ class WaypointPlanner:
             return came2, reached2, relaxed
         return came, reached, cost
 
+    # Padding around the start/goal bounding box that A* may expand into, in
+    # cells. The map is 144x81 = 11664 cells but a waypoint is at most ~15 cells
+    # away (0.55 of the short side), so an unbounded search spends most of its
+    # time exploring ground in the opposite direction. 14 cells of slack is
+    # roughly a quarter-screen of room to detour around a wall, which is more
+    # than any real obstacle needs; a route that genuinely has to go further
+    # than that is one the commitment would time out on anyway.
+    _SEARCH_PAD = 14
+
     def _astar(self, cost, start, goal):
         """Returns (came_from, best_node). Falls back to the closest node reached."""
         gh, gw = cost.shape
+        # Bound the search to a box around start and goal (see _SEARCH_PAD).
+        pad = self._SEARCH_PAD
+        bx0 = max(0, min(start[0], goal[0]) - pad)
+        bx1 = min(gw - 1, max(start[0], goal[0]) + pad)
+        by0 = max(0, min(start[1], goal[1]) - pad)
+        by1 = min(gh - 1, max(start[1], goal[1]) + pad)
         if not np.isfinite(cost[start[1], start[0]]):
             # Standing in a cell we think is solid (perception hiccup, the
             # player sprite covering its own tile, or our own inflation). Treat
@@ -781,7 +796,7 @@ class WaypointPlanner:
             row0 = ny0 * gw
             for dx, dy, step in _NEIGHBOURS:
                 nx, ny = nx0 + dx, ny0 + dy
-                if nx < 0 or nx >= gw or ny < 0 or ny >= gh:
+                if nx < bx0 or nx > bx1 or ny < by0 or ny > by1:
                     continue
                 c = flat[ny * gw + nx]
                 if c >= inf:

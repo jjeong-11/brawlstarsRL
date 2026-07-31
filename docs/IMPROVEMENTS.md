@@ -55,7 +55,7 @@ requires no algorithmic change — `BrawlStarsEnv` already takes a `serial`. Thi
 is the cheapest possible way to turn an overnight run into a two-hour one. The
 main work is making `controls.json` per-serial.
 
-### 1.4 Behaviour cloning from your own play
+### 1.4 Behaviour cloning from your own play  — **DONE**
 
 You already have four gameplay recordings and a perception stack that turns
 frames into `GameState`. What you do not have is the *action* that produced each
@@ -97,7 +97,7 @@ the anchor is tracked, the search window could be much tighter and much more
 reliable. Getting this to ~90% would let the attack gate actually work, and 89%
 of attacks were previously fired on an empty clip.
 
-### 2.3 Kill attribution is heuristic
+### 2.3 Kill attribution is heuristic  — **DONE**
 
 `rl/kills.py` infers knockouts from `players_left` decreasing, which credits the
 agent for kills it did not make. In Solo Showdown with 10 players that is a
@@ -202,26 +202,46 @@ For reference, so the list above is not read as "nothing has been done".
 | RL | `--action-delay N` puts recent actions in the observation |
 | eng | pytest suite under `tests/` (62 tests); menus split out of `env.py` |
 
-## 6. Still open after this pass
+## 6. Performance
 
-**2.3 kill attribution** is the main perception gap. `rl/kills.py` infers a
-knockout from `players_left` decreasing, which in a 10-player Solo Showdown
-credits the agent for most kills it did not make — and `kill` is worth +5.0,
-second only to winning. The on-screen defeat banner is the ground truth. Three
-options, cheapest first:
+Measured per in-match step, capture excluded (`showdown.png`, forced in-match
+path, 500 steps):
 
-1. **Proximity + damage gating.** Only credit a kill when an enemy was within
-   attack range in the last second AND the agent fired. Cheap, no new detector,
-   and it removes the obviously-wrong credits.
-2. **Read the banner.** "<name> was defeated by <name>" appears top-centre for
-   ~2s. The username classifier already exists; the work is an ROI plus a
-   template match on "by". This is the correct fix.
-3. **Track enemy disappearance.** Correlate a tracked enemy vanishing with the
-   agent's own shots landing. Most robust, most work, and it needs enemy
-   tracking that does not exist yet.
+| stage | ms | note |
+|---|---|---|
+| perceive | 3.6 | LivePerception, stage-scheduled |
+| terrain + gas + camera | 4.0 | gas recomputed every 3 steps |
+| act (planner + A* + localiser) | 2.2 | |
+| reward + encode | 0.0 | |
+| **total compute** | **10.0** | ~100 fps if capture were free |
 
-Until one of these lands, consider dropping `kill` to ~2.0 so a false credit
-costs less than a real one earns.
+Capture dominates on a phone, so end-to-end throughput is set by transport:
+scrcpy ~14 fps, `adb screencap` 3-6 fps. That is unchanged from before this
+work — compute is still an order of magnitude below capture.
+
+Two regressions were found and fixed while measuring:
+
+* **The localiser retried forever.** A full search is ~25 ms and it re-ran
+  every 20 ticks for the whole match on any arena it could not place. It now
+  skips when the explored region has not grown (the search is deterministic
+  given the patch, so identical evidence cannot give a different answer) and
+  backs off exponentially. Step cost 14.4 ms -> 8.1 ms.
+* **A\* searched the whole 144x81 map.** A waypoint is at most ~15 cells away,
+  so most expansions were in the wrong direction. Bounding the search to the
+  start/goal box plus 14 cells took `act` from 7.0 ms to 1.8 ms.
+
+## 7. Still open after this pass
+
+**Reading the defeat banner** is the remaining kill-attribution gap. The
+heuristic is now gated on the agent having actually fired and on the enemy being
+inside auto-aim range, which removes the obviously-wrong credits — but in a
+10-player lobby, deaths that happen off-screen while the agent is mid-fight are
+still credited. "<name> defeated <name>" appears top-centre for ~2s and is the
+ground truth; the username classifier already exists, so the work is an ROI plus
+a template match on "by". It needs footage to calibrate against, which this repo
+does not have.
+
+Until then, `kill` at +5.0 makes a false credit expensive. Consider ~2.0.
 
 **A/B the scripted combat.** Section 3.3 is done, but the claim that it beats
 the learned heads is a well-motivated guess, not a measurement. The test is the

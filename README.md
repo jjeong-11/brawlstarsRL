@@ -74,7 +74,8 @@ projectv2/
 │   ├── test_rewards.py      reward engine
 │   ├── test_mapdb.py        arena extraction sanity
 │   └── test_localize.py     identification, and refusing to guess
-├── tools/               Offline utilities (harvest templates, classifier, calibrate_map.py)
+├── tools/               Offline utilities (harvest templates, classifier,
+│                        calibrate_map.py, behaviour_clone.py)
 ├── media/               showdownmaps/ (72 arena layouts) testphotos/ crops/
 │                        gasphotos/ (labelled gas fixtures)
 ├── training_data/       username-classifier dataset
@@ -379,6 +380,26 @@ does the deciding, the policy's attack and super heads are decoration, so they
 were removed: `MultiDiscrete([16, 3, 2, 2])` → `MultiDiscrete([16, 3])`, 192
 combinations down to 48. Every sample now goes into movement, which is the part
 that is actually hard. See `rl/combat.py` for what this gives up.
+
+### Warm-starting from your own play
+
+A live phone produces ~36k steps an hour, and PPO needs hundreds of thousands.
+A recording is the one source of experience that costs no phone time — but it
+has no actions in it. They are reconstructed: `camera_tracker` measures world
+scroll, the camera follows the player, so scroll negated is the heading actually
+walked, and how long a heading held gives the commitment tier. (Attack and super
+are scripted now, so there is nothing to infer for them.)
+
+```bash
+python tools/behaviour_clone.py extract my_match.mp4 --out bc_data.npz
+python tools/behaviour_clone.py train bc_data.npz --out brawlstars_move.zip
+python scripts/train_rl.py --live --serial <SERIAL>
+```
+
+The last step resumes from the cloned checkpoint automatically — don't pass
+`--fresh`. Record with a **single-body brawler**: no clones, no summons, no pets.
+These are reconstructed labels, not recorded ones, so treat it as a warm start
+rather than a teacher.
 
 ### Action latency
 

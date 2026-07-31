@@ -41,7 +41,9 @@ The obvious implementation matches the current frame's 48x27 grid. It does not
 work, and it fails in the worst possible way — confidently.
 
 Measured against all 71 reference maps, with 8% of cells flipped to simulate
-segmentation noise, identifying a square patch of N x N MAP cells:
+segmentation noise, identifying a square patch of N x N MAP cells (at native
+scale -- see `min_lock_confidence` for the numbers through the full resampling
+pipeline, which is what the thresholds are actually set from):
 
     patch     correct     mean margin over the runner-up
     8x8       19/30       +0.073
@@ -114,24 +116,73 @@ class LocalizerConfig:
     # docstring. Below it, identification is a coin flip against 71 maps.
     min_patch_cells: int = 12
 
-    # matchTemplate correlation below which a pose is not believed. Occupancy
-    # grids are noisy (bushes disagree by construction, see mapdb), so this is
-    # deliberately not near 1.0.
+    # matchTemplate correlation below which a TRACKED pose is not believed.
+    # Lower than the lock threshold on purpose: tracking is a local search on an
+    # already-identified map, and a frame where segmentation partly fails should
+    # make it coast, not throw the lock away. `relock_after` provides the
+    # hysteresis.
     min_confidence: float = 0.42
-    # A first lock has to clear a higher bar than a tracked update, because
-    # getting the map wrong is unrecoverable in a way that a jittery position
-    # is not.
-    min_lock_confidence: float = 0.55
-    # ... and beat the runner-up by this much. Also measured: at a 12x12 patch
-    # the true map leads by +0.25 on average, while a too-small patch leads by
-    # +0.07. Requiring 0.15 rejects the second case without rejecting the first.
-    min_margin: float = 0.15
 
-    # Attempts (spaced by `attempt_every`) that must agree before locking.
-    vote_frames: int = 3
+    # THE THRESHOLDS THAT MATTER. Set from measurement, and the measurement had
+    # to be redone twice because the first two versions flattered the system.
+    #
+    # Attempt 1 measured the MARGIN over the runner-up on native-scale crops:
+    # +0.25 at 12x12. That does not describe this pipeline at all -- resampling
+    # smooths the patch, and a correct identification on a self-similar arena
+    # can win by 0.126 while scoring 0.975. Gating on margin rejected correct
+    # answers.
+    #
+    # Attempt 2 measured the absolute score, but on crops whose edges happened
+    # to align with map-cell boundaries: correct 0.967-0.982, wrong 0.401. An
+    # enormous gap, and entirely an artefact. The explored region's bounding box
+    # has no reason to align with anything, and misalignment costs ~0.08.
+    #
+    # Attempt 3, with realistic ragged edges (60 trials, random arena, 12-22
+    # cell crop, 8% cell noise, edges trimmed by 0-4 live cells):
+    #
+    #     correct   n=56   min 0.649   p5 0.675   median 0.898   max 0.983
+    #     wrong     n= 4   min 0.627               median 0.648   max 0.691
+    #
+    # THEY OVERLAP. There is no single threshold that separates them, which is
+    # why locking is two-tier rather than one number:
+    #
+    #   score >= lock_outright (0.93)  -> lock on one attempt. Comfortably above
+    #                                     every wrong match observed.
+    #   score >= min_lock_confidence   -> lock only when `vote_frames` separate
+    #            (0.75)                   attempts agree. 0.75 clears the worst
+    #                                     wrong match (0.691) with margin, at the
+    #                                     cost of refusing the weakest correct
+    #                                     ones -- which is the right trade, since
+    #                                     refusing costs nothing and a wrong lock
+    #                                     is unrecoverable.
+    min_lock_confidence: float = 0.75
+    lock_outright: float = 0.93
+    # A weak extra guard only. It cannot carry the decision: wrong matches were
+    # measured at margins up to 0.057 and correct ones as low as 0.126.
+    min_margin: float = 0.04
+
+    # Independent attempts that must agree before locking.
+    #
+    # 2, not 3, and the reason is that `retry_growth` changed what a vote MEANS.
+    # Attempts used to repeat on the same evidence, where `_identify` is
+    # deterministic and voting bought nothing but repetition. Now an attempt only
+    # happens once the explored region has grown by `retry_growth`, so two votes
+    # are two genuinely different observations agreeing -- which is worth far
+    # more than three identical ones, and takes less exploring to obtain.
+    vote_frames: int = 2
     # Identification is expensive — 71 maps x 7 scales — and the explored region
     # only grows slowly, so there is nothing to gain from retrying every tick.
     attempt_every: int = 20
+    # Growth in explored area (as a fraction) required before a FAILED search is
+    # worth repeating. `_identify` is deterministic given the patch, so re-running
+    # it on the same evidence cannot produce a different answer -- it is pure
+    # waste. Measured: without this the search re-ran every 20 ticks forever on a
+    # map it could not place, costing ~25 ms each time for the whole match.
+    retry_growth: float = 0.15
+    # Backoff cap. Even when the map IS growing, a search that keeps failing is
+    # probably going to keep failing (an arena not in the database, a skin we
+    # cannot segment), so the interval doubles up to this many ticks.
+    max_attempt_every: int = 600
     # Consecutive low-confidence tracked frames before the lock is abandoned.
     relock_after: int = 45
 
@@ -200,6 +251,9 @@ class Localizer:
         self._calls = 0
         self._low_confidence_for = 0
         self.explored_cells: float = 0.0     # side length, in map cells
+        self._next_attempt_at = self.config.attempt_every
+        self._interval = self.config.attempt_every
+        self._area_at_last_attempt = 0
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -244,12 +298,42 @@ class Localizer:
             return self.pose
 
         if self.pose is None:
-            # Identification is 71 maps x 7 scales; the explored region grows
-            # slowly, so retrying every tick buys nothing.
-            if self._calls % max(1, self.config.attempt_every):
-                return None
-            return self._identify(patch, offset)
+            return self._maybe_identify(patch, offset)
         return self._track(patch, offset, camera_delta_cells)
+
+    # ------------------------------------------------------------------ #
+    def _maybe_identify(self, patch, offset):
+        """Run a full search only when it could plausibly say something new.
+
+        Identification costs ~25 ms (71 maps x up to 7 scales), so when to
+        SKIP it matters as much as how it works:
+
+          * Not before `_next_attempt_at`. The explored region grows slowly;
+            retrying every tick buys nothing.
+          * Not if the explored area has not grown since the last failure.
+            `_identify` is deterministic given the patch -- the same evidence
+            cannot produce a different answer, so re-running it is pure waste.
+            Without this the search repeated every 20 ticks for the whole match
+            on any arena it could not place.
+          * With a doubling backoff. An arena that is not in the database, or a
+            skin that will not segment, fails forever; the cost of that should
+            not be linear in match length.
+        """
+        cfg = self.config
+        if self._calls < self._next_attempt_at:
+            return None
+        area = int(patch.size)
+        if (self._area_at_last_attempt
+                and area < self._area_at_last_attempt * (1.0 + cfg.retry_growth)):
+            self._next_attempt_at = self._calls + self._interval
+            return None
+
+        self._area_at_last_attempt = area
+        pose = self._identify(patch, offset)
+        if pose is None:
+            self._interval = min(cfg.max_attempt_every, self._interval * 2)
+            self._next_attempt_at = self._calls + self._interval
+        return pose
 
     # ------------------------------------------------------------------ #
     def _identify(self, patch: np.ndarray, offset) -> Optional[Pose]:
@@ -274,12 +358,12 @@ class Localizer:
             top, runner_up = scored[0], (scored[1][0] if len(scored) > 1 else -1.0)
             margin = top[0] - runner_up
             if best_overall is None or top[0] > best_overall[0][0]:
-                best_overall = (top, margin, scale)
+                best_overall = (top, margin, scale, side)
 
         if best_overall is None:
             return None            # still too little explored to try
 
-        (score, gm, x, y), margin, scale = best_overall
+        (score, gm, x, y), margin, scale, side = best_overall
         self._attempts += 1
         if score < cfg.min_lock_confidence or margin < cfg.min_margin:
             return None
@@ -287,7 +371,21 @@ class Localizer:
         prev = self._votes.get(gm.name, (0, 0.0))
         self._votes[gm.name] = (prev[0] + 1, prev[1] + score)
         count, total = self._votes[gm.name]
-        if count < cfg.vote_frames:
+
+        # A DECISIVE single attempt is enough, and it has to be -- requiring two
+        # votes unconditionally deadlocks. Attempts only fire once the explored
+        # region has grown (see `_maybe_identify`), but exploration PLATEAUS:
+        # the world map is finite, so once the agent has covered it `seen` stops
+        # growing, no second attempt ever fires, and the localiser sits on one
+        # vote for the rest of the match.
+        #
+        # Locking on one attempt is also what the evidence supports. Measured at
+        # a 12x12 patch clearing this margin, a single attempt was 30/30 correct
+        # -- the second vote was belt-and-braces added without measuring. So it
+        # is kept only for the MARGINAL cases, where the patch is barely over the
+        # threshold or the margin is slim.
+        decisive = side >= cfg.min_patch_cells and score >= cfg.lock_outright
+        if count < (1 if decisive else cfg.vote_frames):
             return None
 
         # `origin` is relative to the caller's full array, not the crop.
@@ -351,7 +449,8 @@ class Localizer:
                         f"little to identify a map reliably)")
             top = sorted(self._votes.items(), key=lambda kv: -kv[1][0])[:1]
             hint = f", leading {top[0][0]}" if top else ""
-            return f"searching ({self._attempts} attempts{hint})"
+            return (f"searching ({self._attempts} attempts{hint}, "
+                    f"retry every {self._interval} ticks)")
         p = self.pose
         return (f"{p.game_map.name} @ ({p.origin[0]:.1f}, {p.origin[1]:.1f}) "
                 f"scale {p.scale:.1f} conf {p.confidence:.2f}"

@@ -201,16 +201,19 @@ def test_kill_attributor():
 
     # Baseline (no drop) -> no kill.
     assert ka.update(live(left=8, sc=0.1)) == 0
-    # Dealt damage (super rose) + enemy near, then a player dies -> credited.
-    ka.update(live(left=8, sc=0.3))                     # super rose = dealt damage
+    # Firing is now observed directly rather than inferred from the super charge
+    # rising -- the charge caps at 1.0, so the inference silently stopped working
+    # at full super. See rl/kills.py.
+    ka.note_fired()
+    ka.update(live(left=8, sc=0.3))
     credited = ka.update(live(left=7, sc=0.3, enemies=1))  # someone died
     assert credited == 1, credited
 
-    # A death with NO recent damage dealt -> not our kill (placement only).
+    # A death with NO recent shot -> not our kill (placement only).
     ka2 = KillAttributor()
     ka2.reset()
     ka2.update(live(left=6, sc=0.0, enemies=0))
-    for _ in range(15):                                  # let damage/near windows lapse
+    for _ in range(15):                                  # let the windows lapse
         ka2.update(live(left=6, sc=0.0, enemies=0))
     assert ka2.update(live(left=5, sc=0.0, enemies=0)) == 0
     print("ok  kill attributor credits own kills, ignores distant deaths")
@@ -226,3 +229,74 @@ def run_all():
 
 if __name__ == "__main__":
     run_all()
+
+
+# --- kill attribution -------------------------------------------------------
+def _live(left, enemies=(), super_charge=0.0, anchor=(960, 540, 40),
+          state="in_match", frame_size=(1920, 1080)):
+    return {
+        "game_state": {"state": state, "brawlers_left": left, "rank": None},
+        "enemies": [{"center": e} for e in enemies],
+        "anchor": anchor,
+        "super_charge": super_charge,
+        "frame_size": frame_size,
+    }
+
+
+def test_kill_credited_when_engaged():
+    from rl.kills import KillAttributor
+    k = KillAttributor()
+    near = (960 + 200, 540)
+    k.update(_live(5, [near]))
+    k.note_fired()
+    k.update(_live(5, [near]))
+    k.note_fired()
+    assert k.update(_live(4, [near])) == 1, "did not credit a kill while engaged"
+
+
+def test_kill_not_credited_when_never_shot():
+    """A death while the agent has not fired is someone else's kill."""
+    from rl.kills import KillAttributor
+    k = KillAttributor()
+    near = (960 + 200, 540)
+    for _ in range(5):
+        k.update(_live(5, [near]))
+    assert k.update(_live(4, [near])) == 0, "credited a kill without firing"
+
+
+def test_kill_not_credited_for_distant_death():
+    from rl.kills import KillAttributor
+    k = KillAttributor()
+    far = (960 + 900, 540 + 400)          # well beyond auto-aim range
+    k.note_fired()
+    k.update(_live(5, [far]))
+    assert k.update(_live(4, [far])) == 0, "credited a kill on an out-of-range enemy"
+
+
+def test_kill_credit_survives_a_full_super():
+    """THE REGRESSION THIS CLASS WAS REWRITTEN FOR.
+
+    The old version inferred "dealt damage" from the super charge RISING. The
+    charge caps at 1.0, so once full it stops rising and kills stopped being
+    credited -- exactly when the agent is strongest. Firing is now observed
+    directly, so a pinned super must not suppress credit.
+    """
+    from rl.kills import KillAttributor
+    k = KillAttributor()
+    near = (960 + 200, 540)
+    for _ in range(6):                     # super pinned at full, never rises
+        k.note_fired()
+        k.update(_live(5, [near], super_charge=1.0))
+    assert k.update(_live(4, [near], super_charge=1.0)) == 1, (
+        "a full super suppressed kill credit")
+
+
+def test_kill_attributor_resets_between_matches():
+    from rl.kills import KillAttributor
+    k = KillAttributor()
+    near = (960 + 200, 540)
+    k.note_fired()
+    k.update(_live(3, [near]))
+    k.update(_live(3, [near], state="match_end"))
+    assert k._prev_left is None
+    assert k.update(_live(9, [near])) == 0

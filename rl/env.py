@@ -462,6 +462,11 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
     def step(self, action):
         t_step = time.perf_counter()
         fired_attack, fired_super = self._combat()
+        if fired_attack or fired_super:
+            # Kill attribution needs to know we actually shot. It used to infer
+            # this from the super charge rising, which silently stops working at
+            # full charge -- see rl/kills.py.
+            self.kill_attr.note_fired()
 
         t0 = time.perf_counter()
         intent = self.executor.apply(action, state=self._last_state,
@@ -658,6 +663,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
             self._last_frame = frame
         t0 = time.perf_counter()
         live, _timings = self.perception.tick(frame)
+        live["frame_size"] = (frame.shape[1], frame.shape[0])
         self._prof["perceive"] += time.perf_counter() - t0
         sc = self.super_charge_fn(frame, live) if self.super_charge_fn else None
         kills = self.kills_fn(frame, live) if self.kills_fn else self.kill_attr.update(live)

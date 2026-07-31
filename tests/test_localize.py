@@ -28,9 +28,17 @@ def _synthetic(gm, side, scale, rng, noise=0.08):
     return (np.where(flip, 1.0 - live, live) > 0.5), (tx, ty)
 
 
-def _run(loc, live, seen, cfg):
-    for _ in range(cfg.attempt_every * cfg.vote_frames + 1):
-        pose = loc.update(live, seen)
+def _run(loc, live, seen, cfg, grow=None):
+    """Feed the localiser until it locks, simulating exploration.
+
+    The map must GROW between attempts. A search is only retried once the
+    explored region has expanded by `retry_growth` -- re-running it on identical
+    evidence is deterministic and therefore pointless -- so a test that holds
+    the patch fixed would never get a second attempt, and never lock.
+    """
+    for step in range(cfg.attempt_every * 40):
+        cur, cur_seen = (grow(step) if grow else (live, seen))
+        pose = loc.update(cur, cur_seen)
         if pose is not None:
             return pose
     return None
@@ -48,7 +56,20 @@ def test_locates_a_large_enough_patch(db):
             continue
         trials += 1
         live, (tx, ty) = _synthetic(gm, side, 3.0, rng)
-        pose = _run(Localizer(db=db), live, np.ones_like(live, bool), cfg)
+
+        # Reveal the patch outward from the middle, the way a real agent
+        # uncovers ground as it walks.
+        h, w = live.shape
+
+        def grow(step, live=live, h=h, w=w):
+            frac = min(1.0, 0.5 + 0.015 * step)
+            seen = np.zeros((h, w), bool)
+            y0, y1 = int(h * (1 - frac) / 2), int(h - h * (1 - frac) / 2)
+            x0, x1 = int(w * (1 - frac) / 2), int(w - w * (1 - frac) / 2)
+            seen[y0:y1, x0:x1] = True
+            return live, seen
+
+        pose = _run(Localizer(db=db), live, np.ones_like(live, bool), cfg, grow=grow)
         if pose is None:
             continue
         if pose.game_map.name == gm.name and np.hypot(pose.origin[0] - tx,
@@ -58,6 +79,26 @@ def test_locates_a_large_enough_patch(db):
             wrong += 1
     assert wrong == 0, f"{wrong} WRONG locks -- unrecoverable, must never happen"
     assert ok >= 0.8 * trials, f"only located {ok}/{trials}"
+
+
+def test_score_thresholds_bracket_the_measured_gap(db):
+    """The lock thresholds must sit inside the measured correct/wrong overlap.
+
+    Measured (see LocalizerConfig): correct identifications score 0.649-0.983,
+    wrong ones 0.627-0.691. A guard against someone "tuning" these later without
+    redoing the measurement -- lowering min_lock_confidence below 0.70 would
+    start accepting the wrong matches outright.
+    """
+    cfg = LocalizerConfig()
+    assert cfg.min_lock_confidence > 0.70, (
+        "below the worst measured WRONG match (0.691) -- single attempts would "
+        "start locking onto the wrong arena")
+    assert cfg.lock_outright > cfg.min_lock_confidence
+    assert cfg.lock_outright >= 0.90, (
+        "a one-attempt lock has to clear every wrong match seen, not just most")
+    assert cfg.vote_frames >= 2, (
+        "below lock_outright, agreement across independent observations is the "
+        "only thing separating correct from wrong")
 
 
 def test_refuses_a_patch_that_is_too_small(db):
