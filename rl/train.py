@@ -200,9 +200,9 @@ def main() -> None:
         return
 
     # Each control design gets its own save name and checkpoint directory.
-    #   checkpoints/           v3, MultiDiscrete([9, 2, 2]),      46-dim obs
-    #   checkpoints_waypoint/  15x15 grid waypoints,              46-dim obs
     #   checkpoints_polar/     MultiDiscrete([16, 3, 2, 2]),      60-dim obs
+    # (checkpoints/ for the 8-way v3 and checkpoints_waypoint/ for the 15x15
+    # grid have been deleted -- neither could be loaded by this action space.)
     # Weights are not transferable between them (both the action head and the
     # input layer change shape), so they must never share a path — a stale
     # resume would either crash or, worse, silently load a policy whose action
@@ -237,7 +237,7 @@ def main() -> None:
                     tensorboard_log=str(tb_dir), verbose=1)
         reset_timesteps = True
 
-    # Periodic checkpoints -> checkpoints/. Progress survives even a hard crash.
+    # Periodic checkpoints -> ckpt_dir. Progress survives even a hard crash.
     checkpoint = CheckpointCallback(save_freq=args.save_every, save_path=str(ckpt_dir),
                                     name_prefix="brawlstars_ppo")
     print(f"Training. ent_coef={args.ent_coef} action_repeat={args.action_repeat} | "
