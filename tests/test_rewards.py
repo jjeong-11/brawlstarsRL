@@ -9,7 +9,6 @@ OCR-noise guards and the perception->GameState adapter.
 import pathlib
 import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from rl.state import GameState, adapt_live_state, MISSING_EXTRACTORS  # noqa: E402
 from rl.rewards import RewardCalculator, RewardConfig  # noqa: E402

@@ -30,9 +30,14 @@ _DEFAULT_VIDEO = _ROOT / "media" / "testvideos" / "test_game1.mp4"
 def make_env(live: bool = False, serial=None, controls_path=None, tick_seconds: float = 0.1,
              action_repeat: int = 1, use_scrcpy: bool = False, use_sendevent: bool = False,
              sendevent_orientation: str = "A", sendevent_device: str = None,
-             profile_every: int = 0, trace_seconds: float = 0.0):
+             profile_every: int = 0, trace_seconds: float = 0.0,
+             action_delay: int = 0):
     reward_config = RewardConfig()   # spec defaults; tune here
-    extra = {"trace_seconds": trace_seconds} if trace_seconds else {}
+    extra = {}
+    if trace_seconds:
+        extra["trace_seconds"] = trace_seconds
+    if action_delay:
+        extra["action_delay"] = action_delay
 
     if not live:
         # The recordings are gitignored (612MB, two of them over GitHub's 100MB
@@ -157,6 +162,15 @@ def main() -> None:
                          "could only ever learn from the dense terms. 0.999 "
                          "gives a ~1000-step horizon, so the end of the match is "
                          "at least in view.")
+    ap.add_argument("--action-delay", type=int, default=0, metavar="N",
+                    help="ticks between choosing an action and it reaching the "
+                         "screen. MEASURE IT FIRST with "
+                         "scripts/measure_latency.py -- it is device-specific. "
+                         "The last N actions are added to the observation, "
+                         "which is what keeps the problem Markov under a "
+                         "constant delay; without it PPO credits each reward "
+                         "to whatever was chosen N ticks after the action that "
+                         "actually caused it.")
     ap.add_argument("--no-recurrent", action="store_true",
                     help="use feed-forward PPO instead of RecurrentPPO. The "
                          "observation is a single-frame snapshot, so without "
@@ -216,7 +230,8 @@ def main() -> None:
                        use_sendevent=args.sendevent,
                        sendevent_orientation=args.sendevent_orientation,
                        sendevent_device=args.sendevent_device,
-                       profile_every=args.profile, trace_seconds=args.trace)
+                       profile_every=args.profile, trace_seconds=args.trace,
+                       action_delay=args.action_delay)
     except RuntimeError as e:
         print("Could not start live env:", e)
         return

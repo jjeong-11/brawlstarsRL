@@ -120,7 +120,7 @@ def main() -> None:
                          "Nothing is sent to the phone. Try 2.")
     ap.add_argument("--model", default=None,
                     help="policy to ask for actions under --trace. Defaults to "
-                         "./brawlstars_ppo_polar.zip; without one, headings are "
+                         "./brawlstars_move.zip; without one, headings are "
                          "sampled at random, which still exercises the planner.")
     args = ap.parse_args()
 
@@ -230,7 +230,7 @@ def _load_policy(path):
     (relocation, A*, clearance, gas escape) against real frames. It just does
     not tell you whether the POLICY is choosing sensibly.
     """
-    p = pathlib.Path(path) if path else (_ROOT / "brawlstars_ppo_polar.zip")
+    p = pathlib.Path(path) if path else (_ROOT / "brawlstars_move.zip")
     if not p.exists():
         print(f"no policy at {p} — tracing with random headings")
         return None

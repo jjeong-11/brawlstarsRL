@@ -12,3 +12,10 @@ mss>=6.0                  # only needed for live screen capture (--screen)
 gymnasium>=0.29           # env API
 stable-baselines3>=2.0    # PPO trainer
 tensorboard>=2.10         # training curves (entropy, reward) via --logdir tb_logs
+
+# --- added in the RecurrentPPO / pytest pass -------------------------------
+sb3-contrib          # RecurrentPPO (MlpLstmPolicy). Without it rl/train.py
+                     # falls back to feed-forward PPO and says so, but the
+                     # observation is a single-frame snapshot so the policy
+                     # then has no memory at all.
+pytest               # `python -m pytest` runs everything under tests/.

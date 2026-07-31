@@ -50,7 +50,6 @@ except Exception:  # allow import/use without gymnasium installed
 
 from perception.liveLoop import (  # noqa: E402
     LivePerception, VideoSource, ScreenSource, AdbScreencapSource)
-from perception.getGameState import get_game_state  # noqa: E402
 from perception.getTerrain import (  # noqa: E402
     find_terrain, play_rect, ProfileSelector, GRID_W, GRID_H)
 from perception.getGas import gas_info  # noqa: E402
@@ -62,6 +61,7 @@ from .rewards import RewardCalculator, RewardConfig
 from .state import GameState, adapt_live_state
 from .kills import KillAttributor
 from .combat import CombatPolicy
+from .menus import navigate_to_match
 
 N_ENEMY_SLOTS = 3          # nearest N enemies encoded individually
 N_BOX_SLOTS = 2            # nearest N power-cube boxes encoded individually
@@ -71,7 +71,34 @@ _ENTITY_DIM = (N_ENEMY_SLOTS + N_BOX_SLOTS + N_CUBE_SLOTS) * 4
 _MOTION_DIM = 3            # velocity dx, dy, speed
 _PREV_ACTION_DIM = 5       # cos/sin heading, distance tier, attacked, supered
 _PLANNER_DIM = 6           # active, progress, waypoint dx/dy/dist, blocked
-OBS_DIM = 18 + _ENTITY_DIM + _MOTION_DIM + _PREV_ACTION_DIM + _PLANNER_DIM  # = 60
+def obs_dim(action_history: int = 1) -> int:
+    return (18 + _ENTITY_DIM + _MOTION_DIM
+            + _PREV_ACTION_DIM * max(1, action_history) + _PLANNER_DIM)
+
+
+OBS_DIM = obs_dim(1)       # = 60, the default single-action layout
+
+# WHY THE ACTION HISTORY IS AN OBSERVATION AND NOT A REWARD FIX.
+#
+# There is a delay between choosing an action and it reaching the screen: adb
+# transport, the game's input handling and animation ramp, the capture
+# pipeline, and the fact that the env acts on the frame it was shown one step
+# earlier. Under a constant delay of N steps, the reward at step t is a
+# consequence of the action at step t-N, and PPO credits it to step t. Every
+# one of those credits is attached to the wrong decision.
+#
+# The tempting fix is to shift the reward stream. It does not work: you would
+# need r_{t+N} at step t, and buffering to fake it just means acting on stale
+# observations, which is a worse problem than the one being solved.
+#
+# The correct fix is textbook: an MDP with a constant action delay N is STILL
+# MARKOV provided the last N actions are part of the state. So they go into the
+# observation, and the policy can tell which of its recent decisions is the one
+# landing now instead of inferring it from a signal that does not contain the
+# answer.
+#
+# Measure N first with scripts/measure_latency.py -- it is device-specific and
+# not guessable.
 
 # Screen pixels per step that count as "full speed" when normalising velocity.
 # A brawler crosses roughly a quarter of the short side per second, so at a
@@ -149,9 +176,30 @@ def _nearest_slots(positions, px, py, w, h, n_slots):
     return out
 
 
+def _encode_action(prev_action):
+    """One action as 5 numbers. `None` must not look like a real action."""
+    if prev_action is None:
+        # Heading is encoded on the unit circle, so its neutral value is the
+        # centre (0.5, 0.5) rather than either extreme.
+        return [0.5, 0.5, 0.0, 0.0, 0.0]
+    from .actions import N_HEADINGS, N_DISTANCES
+    heading, dist = int(prev_action[0]), int(prev_action[1])
+    atk = int(prev_action[2]) if len(prev_action) > 2 else 0
+    sup = int(prev_action[3]) if len(prev_action) > 3 else 0
+    angle = 2.0 * np.pi * (heading % N_HEADINGS) / N_HEADINGS
+    return [
+        float(np.cos(angle) * 0.5 + 0.5),
+        float(np.sin(angle) * 0.5 + 0.5),
+        float(dist / max(1, N_DISTANCES - 1)),
+        1.0 if atk else 0.0,
+        1.0 if sup else 0.0,
+    ]
+
+
 def encode_observation(state: GameState, max_health: float,
                        frame_size=(1280, 720), velocity=(0.0, 0.0),
-                       prev_action=None, planner_status: PlannerStatus = None) -> np.ndarray:
+                       prev_action=None, planner_status: PlannerStatus = None,
+                       action_history=None) -> np.ndarray:
     """Flatten a GameState into a fixed-length, ~[0,1]-scaled vector.
 
     Layout:
@@ -222,28 +270,14 @@ def encode_observation(state: GameState, max_health: float,
         float(np.clip((vx ** 2 + vy ** 2) ** 0.5 / _VEL_SCALE, 0.0, 1.0)),
     ]
 
-    # --- previous action ---
-    if prev_action is None:
-        # "No previous action" must not look like a real one. Heading is encoded
-        # on the unit circle, so its neutral value is the centre (0.5, 0.5).
-        obs += [0.5, 0.5, 0.0, 0.0, 0.0]
-    else:
-        from .actions import N_HEADINGS, N_DISTANCES
-        # Intent.raw is still (heading, dist, attack, super) even though the
-        # last two are scripted now: what the agent DID last tick is useful
-        # context whether or not it chose it, and keeping the layout means the
-        # observation width does not change.
-        heading, dist = int(prev_action[0]), int(prev_action[1])
-        atk = int(prev_action[2]) if len(prev_action) > 2 else 0
-        sup = int(prev_action[3]) if len(prev_action) > 3 else 0
-        angle = 2.0 * np.pi * (heading % N_HEADINGS) / N_HEADINGS
-        obs += [
-            float(np.cos(angle) * 0.5 + 0.5),
-            float(np.sin(angle) * 0.5 + 0.5),
-            float(dist / max(1, N_DISTANCES - 1)),
-            1.0 if atk else 0.0,
-            1.0 if sup else 0.0,
-        ]
+    # --- action history (most recent first) ---
+    # Intent.raw is still (heading, dist, attack, super) even though the
+    # last two are scripted now: what the agent DID is useful context
+    # whether or not it chose it.
+    if action_history is None:
+        action_history = [prev_action]
+    for past in action_history:
+        obs += _encode_action(past)
 
     # --- planner commitment ---
     s = planner_status or PlannerStatus()
@@ -294,6 +328,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         move_window_seconds: float = 3.0,
         profile_every: int = 0,
         trace_seconds: float = 0.0,
+        action_delay: int = 0,
     ):
         self.source_factory = source_factory
         # >0 prints a wall-clock breakdown every N steps (see _report_profile).
@@ -345,6 +380,13 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self._velocity = (0.0, 0.0)
         self._prev_player_pos = None
         self._prev_action = None
+        # Last N actions, most recent first. N-1 of them exist purely to keep
+        # the problem Markov under a constant action delay -- see the note
+        # beside obs_dim().
+        from collections import deque
+        self.action_history_len = max(1, int(action_delay) + 1)
+        self._action_history = deque([None] * self.action_history_len,
+                                     maxlen=self.action_history_len)
         self._gas_grid_now = None      # this step's reading, None between refreshes
         self._gas_age = 0              # steps since the detector last ran
         self._last_rect = None         # keeps the camera crop stable across skips
@@ -353,33 +395,20 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         if _GYM:
             self.action_space = make_action_space()
             self.observation_space = spaces.Box(
-                low=0.0, high=1.0, shape=(OBS_DIM,), dtype=np.float32)
-
-    # Menu button positions as screen fractions, measured on 2424x1080
-    # reference screenshots (defeated.png / endMenu.png at the repo root).
-    EXIT_BUTTON_NORM = (0.538, 0.922)          # "Exit" on the defeated screen (dead-center, measured on defeated.png)
-    PLAY_AGAIN_BUTTON_NORM = (0.7376, 0.9167)  # "Play Again" on the end menu
-    NAVIGATE_TIMEOUT = 180.0   # give up navigating after this many seconds
-    # How often to LOOK at the screen while navigating menus. This used to be
-    # fused with the tap rate at 1.0-1.2s, which meant every screen transition
-    # was noticed up to 1.2s after it happened. Measured: 24.2s per reset, 71%
-    # of wall clock, the large majority of it sleeping.
-    NAVIGATE_POLL = 0.3
-    # Minimum gap between taps on the SAME screen. Polling and tapping are
-    # deliberately decoupled: look often so a transition is caught quickly, tap
-    # rarely so a button is never machine-gunned (a second tap landing after
-    # the menu advances would hit whatever is now underneath).
-    NAVIGATE_TAP_INTERVAL = 1.0
+                low=0.0, high=1.0, shape=(obs_dim(self.action_history_len),),
+                dtype=np.float32)
 
     # ------------------------------------------------------------------ #
     def reset(self, *, seed=None, options=None):
+        from collections import deque
         if _GYM:
             super().reset(seed=seed)
         if self.source is not None:
             self.source.close()
         self.source = self.source_factory() if self.source_factory else None
         _t_nav = time.perf_counter()
-        self._navigate_to_match()            # auto-reset: menus -> new match
+        navigate_to_match(self.source, self.executor,
+                          verbose=bool(self.profile_every))
         _nav = time.perf_counter() - _t_nav
         self.perception = LivePerception()   # fresh smoothing state per episode
         self.reward_calc.reset()
@@ -396,6 +425,8 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self._velocity = (0.0, 0.0)
         self._prev_player_pos = None
         self._prev_action = None
+        self._action_history = deque([None] * self.action_history_len,
+                                     maxlen=self.action_history_len)
         self._gas_grid_now = None      # this step's reading, None between refreshes
         self._gas_age = 0              # steps since the detector last ran
         self._last_rect = None         # keeps the camera crop stable across skips
@@ -415,77 +446,6 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self._prof["reset_wait"] = keep_wait
         self._prof["resets"] = keep_n
         return self._encode(state), {"state": state}
-
-    def _navigate_to_match(self):
-        """Drive the menus back into a match: defeated -> Exit, end menu ->
-        wait 5s -> Play Again, loading/unknown -> wait. Live sources only
-        (recordings can't react to taps); no-ops without a tappable executor.
-        """
-        if (self.source is None or not getattr(self.source, "live", False)
-                or not hasattr(self.executor, "tap_norm")):
-            return
-        # Pause background frame capture so the menu taps (Exit / Play Again) get
-        # the USB/adb channel to themselves; continuous screencap otherwise queues
-        # behind big frame transfers and makes restarting a match sluggish. grab()
-        # still works — it captures synchronously while paused.
-        pause = getattr(self.source, "pause", None)
-        resume = getattr(self.source, "resume", None)
-        if pause:
-            pause()
-        buttons = {"defeated": self.EXIT_BUTTON_NORM,
-                   "match_end": self.PLAY_AGAIN_BUTTON_NORM}
-        prof = {"grab": 0.0, "classify": 0.0, "sleep": 0.0, "polls": 0, "taps": 0}
-        t_start = time.perf_counter()
-        try:
-            deadline = time.time() + self.NAVIGATE_TIMEOUT
-            last_tap_at = 0.0
-            last_screen = None
-            while time.time() < deadline:
-                poll_due = time.perf_counter() + self.NAVIGATE_POLL
-
-                t0 = time.perf_counter()
-                frame = self.source.grab()
-                prof["grab"] += time.perf_counter() - t0
-                prof["polls"] += 1
-
-                if frame is not None:
-                    t0 = time.perf_counter()
-                    screen = get_game_state(frame)["state"]
-                    prof["classify"] += time.perf_counter() - t0
-                    if screen == "in_match":
-                        return
-
-                    # Re-tap while the screen is still showing: early taps during
-                    # the rank/trophy animation harmlessly miss, and a later one
-                    # lands once the button goes live. Rate-limited per screen so
-                    # fast polling does not turn into a burst of taps.
-                    if screen != last_screen:
-                        last_tap_at = 0.0        # new screen, tap immediately
-                        last_screen = screen
-                    target = buttons.get(screen)
-                    if target and time.time() - last_tap_at >= self.NAVIGATE_TAP_INTERVAL:
-                        self.executor.tap_norm(*target)
-                        last_tap_at = time.time()
-                        prof["taps"] += 1
-
-                # Wait out the REMAINDER of the poll interval. The grab is a
-                # synchronous screencap while capture is paused (a few hundred
-                # ms), so sleeping a flat interval on top of it would roughly
-                # double the polling period.
-                t0 = time.perf_counter()
-                remaining = poll_due - time.perf_counter()
-                if remaining > 0:
-                    time.sleep(remaining)
-                prof["sleep"] += time.perf_counter() - t0
-            print("WARNING: _navigate_to_match timed out; continuing anyway")
-        finally:
-            if resume:
-                resume()
-            total = time.perf_counter() - t_start
-            if self.profile_every and total > 0.5:
-                print(f"[navigate] {total:5.1f}s | {prof['polls']} polls, "
-                      f"{prof['taps']} taps | grab {prof['grab']:.1f}s "
-                      f"classify {prof['classify']:.1f}s sleep {prof['sleep']:.1f}s")
 
     def _combat(self):
         """Scripted attack/super for this step. See rl/combat.py.
@@ -514,6 +474,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self._prof["act"] += time.perf_counter() - t0
 
         self._prev_action = intent.raw
+        self._action_history.appendleft(intent.raw)
         if intent.move != (0.0, 0.0):
             self._last_move_t = time.time()           # mark that we moved
 
@@ -823,7 +784,8 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         return encode_observation(state, max_hp, self.frame_size,
                                   velocity=self._velocity,
                                   prev_action=self._prev_action,
-                                  planner_status=self.path_planner.status())
+                                  planner_status=self.path_planner.status(),
+                                  action_history=list(self._action_history))
 
 
 # --- convenience factories --------------------------------------------------- #

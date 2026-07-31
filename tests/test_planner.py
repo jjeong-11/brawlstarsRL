@@ -28,7 +28,6 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from rl.path_planner import WaypointPlanner, PathPlannerConfig  # noqa: E402
 from rl.state import GameState  # noqa: E402
@@ -168,7 +167,6 @@ def test_commits_and_arrives():
     assert drift < 2.0, f"waypoint drifted {drift:.1f}px in world space"
     print(f"  arrived in {arrived_at} steps despite {arrived_at} random actions; "
           f"world drift {drift:.2f}px")
-    return True
 
 
 def test_routes_around_wall():
@@ -200,7 +198,6 @@ def test_routes_around_wall():
     # And it must never have walked INTO the wall.
     assert not world.blocked_at(world.player), "ended inside an obstacle"
     print(f"  closed {100 * (1 - min_d / start_d):.0f}% of the distance around the wall")
-    return True
 
 
 def test_regression_unlatched_never_arrives():
@@ -230,7 +227,6 @@ def test_regression_unlatched_never_arrives():
     assert best > arrive or True   # documented, not enforced
     print(f"  unlatched target stayed {reach:.0f}px away on every one of 60 steps "
           f"(never triggers arrival)")
-    return True
 
 
 def test_gas_overrides():
@@ -245,7 +241,6 @@ def test_gas_overrides():
     move = planner.plan(0, 2, st, (VIEW_W, VIEW_H), terrain=world.terrain())
     assert move[0] < -0.9, f"gas did not override the plan: {move}"
     print(f"  gas override steers {move} (west) despite an eastward commitment")
-    return True
 
 
 def test_action_space_matches_planner():
@@ -263,7 +258,6 @@ def test_action_space_matches_planner():
     # is [16, 3] and not [16, 3, 2, 2].
     assert nvec == [16, 3], nvec
     print(f"  action space {nvec} agrees with the planner config")
-    return True
 
 
 def test_observation_shape():
@@ -289,7 +283,6 @@ def test_observation_shape():
             assert obs.min() >= 0.0 and obs.max() <= 1.0, (
                 f"outside [0,1]: min={obs.min()} max={obs.max()}")
     print(f"  observation is {OBS_DIM}-dim, finite and inside [0,1] on all cases")
-    return True
 
 
 def test_terrain_on_real_frame():
@@ -314,7 +307,6 @@ def test_terrain_on_real_frame():
     gx, gy = to_grid((1000, 300), t["rect"], t["cell"])
     assert not occ[gy, gx], "player cell reported as blocked"
     print(f"  real frame: {100 * occ.mean():.0f}% blocked, grid mapping round-trips")
-    return True
 
 
 def test_planner_survives_missing_perception():
@@ -327,7 +319,6 @@ def test_planner_survives_missing_perception():
     move = planner.plan(3, 1, _state(world), (1920, 1080), terrain=None)
     assert np.isfinite(move).all()
     print("  degrades cleanly with no anchor and with no terrain grid")
-    return True
 
 
 def test_gas_costs_but_does_not_wall():
@@ -368,7 +359,6 @@ def test_gas_costs_but_does_not_wall():
     assert forced[0] > 0.5, f"refused to cross unavoidable gas: {forced}"
     print(f"  detours around a gas band ({detour[1]:+.2f} vertical), "
           f"still crosses when unavoidable ({forced[0]:+.2f} east)")
-    return True
 
 
 def test_gas_destination_is_relocated():
@@ -387,7 +377,6 @@ def test_gas_destination_is_relocated():
     assert not (30 <= gx < 40 and 8 <= gy < 19), (
         f"waypoint latched inside the gas at cell ({gx}, {gy})")
     print(f"  raw target was inside the cloud; latched at cell ({gx}, {gy}) instead")
-    return True
 
 
 # --------------------------------------------------------------------- #
@@ -423,7 +412,6 @@ def test_route_keeps_clear_of_walls():
         f"{cfg.agent_radius_cells} half-width — this is what wedges it")
     print(f"  min clearance along the route {worst:.2f} cells "
           f"(agent half-width {cfg.agent_radius_cells})")
-    return True
 
 
 def test_narrow_gap_still_usable():
@@ -441,7 +429,6 @@ def test_narrow_gap_still_usable():
     assert move != (0.0, 0.0), "refused to move through a one-cell gap"
     assert move[0] > 0.3, f"did not head toward the gap: {move}"
     print(f"  one-cell doorway still traversed: move {move[0]:+.2f},{move[1]:+.2f}")
-    return True
 
 
 def test_map_remembers_terrain_that_scrolled_away():
@@ -474,7 +461,6 @@ def test_map_remembers_terrain_that_scrolled_away():
     assert still > 0, "forgot every wall once it scrolled off screen"
     print(f"  {still} blocked cells retained after the wall scrolled out of view "
           f"(observed {seen_blocked})")
-    return True
 
 
 def test_gas_ring_escape_goes_inward():
@@ -524,7 +510,6 @@ def test_gas_ring_escape_goes_inward():
         f"centroid bug: {move}")
     print(f"  ring cloud: escaped inward (dy {move[1]:+.2f}) rather than "
           f"outward toward the centroid")
-    return True
 
 
 def test_gas_is_remembered_after_scrolling():
@@ -563,7 +548,6 @@ def test_gas_is_remembered_after_scrolling():
         f"it left the view — the agent would walk straight back into it")
     print(f"  cloud still remembered at {still:.2f} coverage after scrolling "
           f"off screen (was {remembered_before:.2f})")
-    return True
 
 
 def test_hud_occluded_cells_get_filled_in():
@@ -615,7 +599,6 @@ def test_hud_occluded_cells_get_filled_in():
         f"unobserved after 20 steps of scrolling — it is never being filled in")
     print(f"  HUD-occluded region: {100 * unseen_first:.0f}% unobserved at first, "
           f"{100 * unseen_after:.0f}% after scrolling")
-    return True
 
 
 def test_gas_not_gated_behind_a_terrain_profile():
@@ -646,7 +629,6 @@ def test_gas_not_gated_behind_a_terrain_profile():
         f"instead of detouring below it: {move}")
     print(f"  no terrain profile, gas still routed around: "
           f"move {move[0]:+.2f},{move[1]:+.2f}")
-    return True
 
 
 def _shaping_run(distances, picked_up_at=None):
@@ -674,7 +656,6 @@ def test_box_shaping_rewards_approach():
     retreat = _shaping_run([0.35, 0.40, 0.45, 0.50])
     assert all(v < 0 for v in retreat[2:]), retreat
     print(f"  approach {approach[2]:+.4f}/step, retreat {retreat[2]:+.4f}/step")
-    return True
 
 
 def test_box_shaping_cannot_be_farmed():
@@ -704,7 +685,6 @@ def test_box_shaping_cannot_be_farmed():
         f"real progress ({honest:+.4f}) must beat oscillating ({farm:+.4f})")
     print(f"  {len(cycle)} steps: oscillating {farm:+.4f}, real progress "
           f"{honest:+.4f} (gross {gross:.3f})")
-    return True
 
 
 def test_box_shaping_survives_pickup():
@@ -715,7 +695,6 @@ def test_box_shaping_survives_pickup():
         f"shaping fired {payouts[-1]:+.4f} on the pickup tick — that is a "
         "penalty for succeeding")
     print("  shaping suppressed on the pickup tick")
-    return True
 
 
 def test_box_shaping_ignores_identity_switches():
@@ -725,7 +704,6 @@ def test_box_shaping_ignores_identity_switches():
         f"a 0.33 distance jump paid {payouts[2]:+.4f} — that is reward for a "
         "detection change, not for moving")
     print("  0.33 jump in nearest-box distance correctly skipped")
-    return True
 
 
 def test_stuck_detection_releases_commitment():
@@ -759,7 +737,6 @@ def test_stuck_detection_releases_commitment():
     assert released_at <= cfg.stuck_ticks + 1, released_at
     print(f"  released the commitment after {released_at} motionless steps "
           f"(stuck_ticks={cfg.stuck_ticks})")
-    return True
 
 
 def test_normal_walking_is_not_stuck():
@@ -780,7 +757,6 @@ def test_normal_walking_is_not_stuck():
                 f"stuck detector fired at step {step} while walking normally")
         camera = world.move(move)
     print("  12 steps of normal walking, commitment never falsely released")
-    return True
 
 
 def test_terrain_profiles_select_correctly():
@@ -811,7 +787,6 @@ def test_terrain_profiles_select_correctly():
         "the MAX_BLOCKED_FRACTION guard is not working")
     print(f"  showdown.png -> {chosen.name} ({score * 100:.0f}%); "
           f"wrong profile correctly refused")
-    return True
 
 
 def test_gas_calibration_fixtures():
@@ -854,7 +829,6 @@ def test_gas_calibration_fixtures():
         assert 0.20 < t["occupancy"].mean() < 0.60, (
             f"{name}: implausible blocked fraction {t['occupancy'].mean():.2f}")
     print(f"  {len(shots)}/{len(shots)} fixtures: in_gas correct, profile matched")
-    return True
 
 
 def test_gas_and_bush_are_separable():
@@ -879,7 +853,6 @@ def test_gas_and_bush_are_separable():
         names = "/".join(channels[c] for c in separated)
         print(f"    {prof.name:14s} bush separated from gas on {names}")
     print(f"  checked {len(PROFILES)} profiles: no bush class can read as gas")
-    return True
 
 
 def _combat_state(**state_kw):
@@ -944,7 +917,6 @@ def test_combat_script():
 
     print("  blocked: no-target, empty-clip, uncharged-super, out-of-range; "
           "allowed: untrusted ammo, ready weapons; super rate-limited")
-    return True
 
 
 def test_healing_is_rewarded_and_not_farmable():
@@ -972,7 +944,6 @@ def test_healing_is_rewarded_and_not_farmable():
         f"a full damage-then-heal cycle netted {cycle:+.4f} — that is farmable")
     print(f"  healing pays {sum(heals):+.3f}; full damage/heal cycle nets "
           f"{cycle:+.4f} (must be <= 0)")
-    return True
 
 
 def test_firing_costs_are_charged_only_when_fired():
@@ -999,7 +970,6 @@ def test_firing_costs_are_charged_only_when_fired():
         f"({hit_value}) — the agent will learn never to shoot")
     print(f"  cost charged only on real shots; a landed hit (~{hit_value:+.2f}) "
           f"still beats the {cfg.attack_cost:.2f} cost")
-    return True
 
 
 def test_perception_survives_no_anchor():
@@ -1048,7 +1018,6 @@ def test_perception_survives_no_anchor():
         assert "anchor_fresh" in live, "liveLoop must publish anchor_fresh"
 
     print("  cube/entity/gas readers accept None; full tick survives no anchor")
-    return True
 
 
 def test_boxes_interrupt_a_commitment():
@@ -1080,7 +1049,6 @@ def test_boxes_interrupt_a_commitment():
         "box interrupt re-fired while the box stayed visible — commitments "
         "would never hold near boxes")
     print("  box appearing releases the commitment; steady visibility does not")
-    return True
 
 
 def test_cube_counter_not_gated_on_verified_anchor():
@@ -1109,7 +1077,6 @@ def test_cube_counter_not_gated_on_verified_anchor():
         from perception.getCube import find_cube_info
         assert find_cube_info(img, None)["cube_count"] is None
     print("  cube reader runs on any anchor and tolerates None")
-    return True
 
 
 def _destination_openness(terrain, player_px, cfg):
@@ -1179,7 +1146,6 @@ def test_destinations_avoid_the_border():
         f"the border terms changed nothing at {4 - improved}/4 positions")
     print(f"  destination openness improved at {improved}/4 positions, "
           f"never worse")
-    return True
 
 
 def test_destinations_stay_off_a_hard_border():
@@ -1219,7 +1185,6 @@ def test_destinations_stay_off_a_hard_border():
         f"{100 * frac:.0f}% of destinations landed in or against the "
         f"out-of-bounds ring")
     print(f"  {100 * frac:.0f}% of destinations in/against a hard border ring")
-    return True
 
 
 def test_gas_is_anticipated():
@@ -1257,7 +1222,6 @@ def test_gas_is_anticipated():
         f"{far:.1f} for open ground — the cloud's advance is not anticipated")
     print(f"  open {far:.1f} | within {cfg.gas_dilate_cells} cells of gas "
           f"{edge:.1f} | in gas {band:.1f}")
-    return True
 
 
 def test_navigate_polls_fast_taps_slowly():
@@ -1296,18 +1260,15 @@ def test_navigate_polls_fast_taps_slowly():
         def tap_norm(self, fx, fy):
             taps.append((_time.time(), fx, fy))
 
-    env = BrawlStarsEnv(source_factory=lambda: src, executor=TapRecorder())
-    env.source = src          # normally set by reset(); we call navigate directly
-    import rl.env as E
-    real_state = E.get_game_state
-    E.get_game_state = lambda frame: {"state": src.screen()}
+    import rl.menus as M
+    real_state = M.get_game_state
+    M.get_game_state = lambda frame: {"state": src.screen()}
     try:
         t0 = _time.time()
-        env._navigate_to_match()
+        M.navigate_to_match(src, TapRecorder())
         elapsed = _time.time() - t0
     finally:
-        E.get_game_state = real_state
-        env.close()
+        M.get_game_state = real_state
 
     # It must not overshoot the 2.0s scripted timeline by much.
     assert elapsed < 2.9, (
@@ -1321,12 +1282,11 @@ def test_navigate_polls_fast_taps_slowly():
     gaps = [b[0] - a[0] for a, b in zip(taps, taps[1:])
             if abs(b[1] - a[1]) < 1e-9]          # consecutive taps, same button
     for g in gaps:
-        assert g >= BrawlStarsEnv.NAVIGATE_TAP_INTERVAL - 0.05, (
+        assert g >= M.NAVIGATE_TAP_INTERVAL - 0.05, (
             f"two taps on the same button {g:.2f}s apart, under the "
-            f"{BrawlStarsEnv.NAVIGATE_TAP_INTERVAL}s minimum")
+            f"{M.NAVIGATE_TAP_INTERVAL}s minimum")
     print(f"  2.0s timeline cleared in {elapsed:.2f}s with {len(taps)} taps "
           f"({src.grabs} polls)")
-    return True
 
 
 def test_hold_ms_fits_the_tick():
@@ -1363,7 +1323,6 @@ def test_hold_ms_fits_the_tick():
     assert short.hold_ms == 40
     print(f"  default hold_ms {auto.hold_ms}ms; clamped to the tick budget "
           f"(200ms @0.05s -> {Controls(move_center=(1,1),attack_btn=(2,2),super_btn=(3,3),hold_ms=200).tuned_for_tick(0.05).hold_ms}ms)")
-    return True
 
 
 def test_commitments_are_fixed_in_seconds():
@@ -1393,68 +1352,3 @@ def test_commitments_are_fixed_in_seconds():
     ticks = _planner_config_for(0.05).commit_ticks
     print(f"  commit_ticks {base.commit_ticks} @0.1s -> {ticks} @0.05s "
           f"(same {base.commit_ticks[0] * 0.1:.1f}-{base.commit_ticks[-1] * 0.1:.1f}s)")
-    return True
-
-
-TESTS = [
-    ("action space matches planner", test_action_space_matches_planner),
-    ("commitments fixed in seconds", test_commitments_are_fixed_in_seconds),
-    ("swipe duration fits the tick", test_hold_ms_fits_the_tick),
-    ("menu navigation is poll-driven", test_navigate_polls_fast_taps_slowly),
-    ("destinations avoid the map border", test_destinations_avoid_the_border),
-    ("destinations stay off a hard border", test_destinations_stay_off_a_hard_border),
-    ("gas is costed before it arrives", test_gas_is_anticipated),
-    ("perception survives no anchor", test_perception_survives_no_anchor),
-    ("boxes interrupt a commitment", test_boxes_interrupt_a_commitment),
-    ("cube counter not gated on verified anchor", test_cube_counter_not_gated_on_verified_anchor),
-    ("combat script", test_combat_script),
-    ("healing rewarded, not farmable", test_healing_is_rewarded_and_not_farmable),
-    ("firing costs charged correctly", test_firing_costs_are_charged_only_when_fired),
-    ("terrain profiles select correctly", test_terrain_profiles_select_correctly),
-    ("gas calibration fixtures", test_gas_calibration_fixtures),
-    ("gas and bush are separable", test_gas_and_bush_are_separable),
-    ("stuck detection releases commitment", test_stuck_detection_releases_commitment),
-    ("normal walking is not flagged stuck", test_normal_walking_is_not_stuck),
-    ("observation shape and range", test_observation_shape),
-    ("terrain on the real frame", test_terrain_on_real_frame),
-    ("commits to a waypoint and arrives", test_commits_and_arrives),
-    ("routes around a wall", test_routes_around_wall),
-    ("gas overrides a commitment", test_gas_overrides),
-    ("gas costs but does not wall", test_gas_costs_but_does_not_wall),
-    ("gas destination is relocated", test_gas_destination_is_relocated),
-    # --- the three rewritten failure modes --- #
-    ("routes keep clear of walls", test_route_keeps_clear_of_walls),
-    ("narrow gap still usable", test_narrow_gap_still_usable),
-    ("map remembers terrain that scrolled away", test_map_remembers_terrain_that_scrolled_away),
-    ("HUD-occluded cells get filled in", test_hud_occluded_cells_get_filled_in),
-    ("gas ring escape goes INWARD", test_gas_ring_escape_goes_inward),
-    ("gas is remembered after scrolling", test_gas_is_remembered_after_scrolling),
-    ("gas is not gated behind a terrain profile", test_gas_not_gated_behind_a_terrain_profile),
-    ("box shaping rewards approach", test_box_shaping_rewards_approach),
-    ("box shaping cannot be farmed", test_box_shaping_cannot_be_farmed),
-    ("box shaping survives pickup", test_box_shaping_survives_pickup),
-    ("box shaping ignores identity switches", test_box_shaping_ignores_identity_switches),
-    ("regression: unlatched target never arrives", test_regression_unlatched_never_arrives),
-    ("degrades without perception", test_planner_survives_missing_perception),
-]
-
-
-def main():
-    failures = 0
-    for name, fn in TESTS:
-        print(f"\n[{name}]")
-        try:
-            fn()
-            print("  PASS")
-        except AssertionError as e:
-            failures += 1
-            print(f"  FAIL: {e}")
-        except Exception as e:  # noqa: BLE001
-            failures += 1
-            print(f"  ERROR: {type(e).__name__}: {e}")
-    print(f"\n{len(TESTS) - failures}/{len(TESTS)} passed")
-    return 1 if failures else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

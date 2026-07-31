@@ -39,7 +39,7 @@ _DEBUG_DIR = Path(__file__).resolve().parent.parent / "debugOutput"
 
 from .getAnchor import find_player_position, find_player_position_ex
 from .getHealth import find_health_info
-from .getAmmo import find_ammo_info
+from .getAmmo import find_ammo_info, AmmoLocator
 from .getCube import find_cube_info
 from .getEnemies import find_entities, find_enemy_health_bars
 from .getPickups import find_ground_cubes
@@ -306,6 +306,9 @@ class LivePerception:
         }
         self._pending_state = None   # for game-state smoothing
         self._pending_anchor = None  # for anchor-jump confirmation
+        # Learns where the ammo row sits relative to the anchor, so ammo stops
+        # depending on the HP digit line parsing. See perception/getAmmo.py.
+        self._ammo_locator = AmmoLocator()
         self._anchor_time = 0.0
         self._pending_hp = None      # for large-HP-change confirmation
         self._pending_cubes = None   # for large-cube-jump confirmation
@@ -407,7 +410,12 @@ class LivePerception:
 
         if in_match and self._due("player", now):
             t0 = time.time()
-            ax, ay, ar, verified = find_player_position_ex(frame, hsv=hsv)
+            # Seed with the previous anchor: the player barely moves between
+            # frames, so his own last position discriminates far better than
+            # "nearest the screen centre", which an enemy standing inboard of
+            # him satisfies just as well. See find_player_position_ex.
+            ax, ay, ar, verified = find_player_position_ex(
+                frame, hsv=hsv, prior=(c["anchor"][0], c["anchor"][1]) if c["anchor"] else None)
             raw_anchor = (ax, ay, ar)
 
             # getAnchor now reports radius 0 when it could not VERIFY the
@@ -476,9 +484,21 @@ class LivePerception:
                     self._pending_hp = None
                 else:
                     self._pending_hp = new_hp
-            # Pass health through so ammo doesn't redo the digit search.
-            ammo_info = (find_ammo_info(frame, c["anchor"], health_info=health)
-                         if hud_readable
+            # Ammo runs on ANY anchor, not just a freshly verified one.
+            #
+            # It used to sit behind `hud_readable` alongside HP and cubes, which
+            # meant it inherited the whole anchor -> health -> ammo chain and
+            # landed on ~15% of frames. But the ammo row is at a fixed offset
+            # from the player sprite, so once `_ammo_locator` has learned that
+            # offset the HP digits no longer have to parse -- a coasted anchor
+            # is enough. HP and cubes still need the verified anchor, because
+            # they are read by OCR at a position that must be right to the
+            # pixel; a pip row only has to be found, and it is found by colour.
+            ammo_anchor = c["anchor"] if c["anchor"] is not None else None
+            ammo_info = (find_ammo_info(frame, ammo_anchor,
+                                        health_info=health if hud_readable else None,
+                                        locator=self._ammo_locator)
+                         if ammo_anchor is not None
                          else {"bounding_box": None, "ammo_count": 0,
                                "detected": False})
             # Carry the count forward across frames where the bar could not be

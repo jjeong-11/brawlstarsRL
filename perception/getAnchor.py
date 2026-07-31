@@ -4,18 +4,18 @@ import numpy as np
 from .getHealth import _ocr_crop
 
 
-def find_player_position(image: np.ndarray, hsv: np.ndarray = None):
+def find_player_position(image: np.ndarray, hsv: np.ndarray = None, prior=None):
     """Finds the local player's position. Returns (x, y, radius).
 
     Thin wrapper over :func:`find_player_position_ex`, kept because callers all
     over the project expect a 3-tuple. Anything positioning a HUD SEARCH WINDOW
     should use the _ex form and check `verified` instead -- see its docstring.
     """
-    x, y, r, _ = find_player_position_ex(image, hsv)
+    x, y, r, _ = find_player_position_ex(image, hsv, prior=prior)
     return x, y, r
 
 
-def find_player_position_ex(image: np.ndarray, hsv: np.ndarray = None):
+def find_player_position_ex(image: np.ndarray, hsv: np.ndarray = None, prior=None):
     """Finds the local player's position. Returns (x, y, radius, verified).
 
     `verified` means the anchor was confirmed by a readable HP number, i.e. it
@@ -56,6 +56,20 @@ def find_player_position_ex(image: np.ndarray, hsv: np.ndarray = None):
 
     `hsv` may be passed when the caller already converted this frame
     (LivePerception computes one shared HSV per tick).
+
+    `prior` is the previous frame's anchor. It changes which candidate WINS,
+    not which candidates are considered.
+
+    The tie-break used to be "closest to screen centre", justified by the
+    camera keeping the player near the middle. That is true but weak: an enemy
+    standing between the player and the centre of the screen satisfies it
+    better than the player does, and enemy readouts are the exact thing this
+    detector keeps getting fooled by. The player's own PREVIOUS position is a
+    far tighter prior -- he moves a handful of pixels between frames while
+    other brawlers move freely and appear and disappear -- so when it is
+    available it replaces the centre prior for selection. The centre prior
+    remains as the gate on where a candidate may be at all, and as the
+    tie-break on the first frame.
     """
     height, width = image.shape[:2]
 
@@ -175,7 +189,8 @@ def find_player_position_ex(image: np.ndarray, hsv: np.ndarray = None):
         # effect noise near the player's green ring glow could out-score
         # the real readout -- while the camera guarantee that the player
         # is the most-centered readable number on screen is much stronger.)
-        dist_sq = ((x + w / 2) - width / 2) ** 2 + ((y + h / 2) - height / 2) ** 2
+        ref_x, ref_y = (prior[0], prior[1]) if prior else (width / 2, height / 2)
+        dist_sq = ((x + w / 2) - ref_x) ** 2 + ((y + h / 2) - ref_y) ** 2
         tier = 1 if green_frac >= 0.10 else 2
         if (best is None or (tier, dist_sq) < (best[0], best[1])):
             best = (tier, dist_sq, (x, y, w, h))

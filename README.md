@@ -41,6 +41,8 @@ projectv2/
 │   ├── getGas.py            is the player standing in the gas zone
 │   ├── getSuper.py          super-charge level from the skull button (0..1)
 │   ├── getTerrain.py        floor/wall/bush -> walkability grid for pathfinding
+│   ├── mapdb.py             72 published arena layouts -> ground-truth occupancy
+│   ├── localize.py          which arena is this, and where am I on it
 │   ├── getGameState.py      match_end / loading / in_match + brawlers-left + rank
 │   ├── digitReader.py       fast template digit OCR (+ digit_*.npz data)
 │   ├── username_classifier.py  (+ username_classifier_weights.json)
@@ -51,22 +53,30 @@ projectv2/
 │   ├── state.py             GameState + adapt_live_state(live dict -> GameState)
 │   ├── rewards.py           RewardConfig + RewardCalculator  ← the learning signal
 │   ├── kills.py             KillAttributor (credits the agent's knockouts)
+│   ├── combat.py            scripted attack/super (NOT learned - see below)
+│   ├── menus.py             between-match navigation (Exit / Play Again)
 │   ├── actions.py           action space + ActionExecutor (Logging / ADB phone)
 │   ├── camera_tracker.py    frame-to-frame world scroll (keeps waypoints still)
 │   ├── world_map.py         persistent, camera-registered occupancy + gas map
 │   ├── path_planner.py      latched destination + A* over that map
 │   ├── debug_trace.py       annotated "what did it decide, and where is it going"
 │   ├── env.py               BrawlStarsEnv (Gymnasium) — glues everything
-│   └── train.py             Stable-Baselines3 PPO
+│   └── train.py             Stable-Baselines3 RecurrentPPO
 ├── scripts/             Entry points you actually run
 │   ├── run_live.py          perception-only status loop
 │   ├── run_prototype.py     perception -> reward loop on real footage  ← the prototype
 │   ├── train_rl.py          PPO training
-│   ├── test_rewards.py      reward-engine unit tests
-│   ├── test_waypoint.py     planner tests in a synthetic scrolling world
+│   ├── watch_live.py        watch rewards + decisions without sending input
+│   ├── measure_latency.py   how many ticks until an action reaches the screen
 │   └── check_perception.py  PRE-FLIGHT: per-stage perception health check
+├── tests/               pytest suite: `python -m pytest`
+│   ├── test_planner.py      planner + world map + gas, in a scrolling sim
+│   ├── test_rewards.py      reward engine
+│   ├── test_mapdb.py        arena extraction sanity
+│   └── test_localize.py     identification, and refusing to guess
 ├── tools/               Offline utilities (harvest templates, classifier, calibrate_map.py)
-├── media/               testphotos/ testvideos/ crops/ gasphotos/ (labelled gas fixtures)
+├── media/               showdownmaps/ (72 arena layouts) testphotos/ crops/
+│                        gasphotos/ (labelled gas fixtures)
 ├── training_data/       username-classifier dataset
 ├── debugOutput/         annotated frames written at runtime (trace/ = decision traces)
 ├── requirements.txt     README.md      LICENSE
@@ -232,7 +242,7 @@ Saturation and value separate them; hue does not. Getting this wrong is
 invisible without ground truth — it cost this project two bugs (the gas band's
 old `S ≤ 200` cap admitted bushes, and `purple_stone`'s bush class was
 calibrated on gas puffs). `media/gasphotos/` holds five labelled fixtures, and
-`scripts/test_waypoint.py` asserts both that they classify correctly and that no
+`tests/test_planner.py` asserts both that they classify correctly and that no
 profile's bush box overlaps the gas box in all three channels.
 
 Design points: terminals dominate so the agent chases the real objective; the
@@ -282,7 +292,7 @@ capture (`adb screencap`) + control together. See
 **[docs/ANDROID_CONTROL.md](docs/ANDROID_CONTROL.md)** for connecting the phone,
 calibrating button coordinates, and the faster scrcpy path.
 
-Run `python scripts/test_waypoint.py` to exercise the planner in a synthetic
+Run `python -m pytest tests/test_planner.py` to exercise the planner in a synthetic
 scrolling world (arrival, wall routing, gas override, and a regression guard against
 the un-latched behaviour).
 
@@ -332,6 +342,59 @@ Three independent causes, all fixed:
    finds the panel from the letterbox alone, so geometry and gas are now established
    independently of the profile.
 
+### Knowing which arena you are on
+
+`perception/mapdb.py` turns the 72 published layouts in `media/showdownmaps/`
+into ground-truth occupancy grids, and `perception/localize.py` matches the
+agent's accumulated map against them to recover absolute position. Once it
+locks, unobserved ground comes from the real layout instead of a prior, and the
+map border is known exactly rather than inferred from surrounding decoration.
+
+Two findings worth keeping in mind:
+
+* **The floor is identified by connectivity, not by area.** "The floor is the
+  most common colour" is wrong on dense maze arenas, where the wall blocks cover
+  more of the render than the ground does — those maps came out ~100% blocked.
+  The floor is instead the largest *connected* single-colour region, which is
+  true by construction: an arena you cannot walk across would be unplayable.
+* **A single frame cannot identify a map, and fails confidently.** Matching one
+  48×27 viewport scored 0.60–0.71 against *every* map in the database, with
+  0.017 between first and second place. Measured discrimination against patch
+  size (71 maps, 8% cell noise): 8×8 → 19/30 correct, 12×12 → 30/30. One
+  viewport is about 8×8. So the localiser matches the *accumulated* world map
+  and refuses to attempt identification below 12×12 — a wrong lock is
+  unrecoverable, while waiting a few seconds costs nothing.
+
+```bash
+python -m perception.mapdb --build --inspect Gated_Community   # eyeball extraction
+python -m perception.localize --selftest                       # 47/48, 0 wrong locks
+```
+
+### Shooting is scripted, not learned
+
+Brawl Stars auto-aims a plain tap, so there is no aiming decision — the whole
+content of "should I shoot" is *is there a target in range and do I have ammo*,
+which the env was already enforcing by overriding the policy. Once the override
+does the deciding, the policy's attack and super heads are decoration, so they
+were removed: `MultiDiscrete([16, 3, 2, 2])` → `MultiDiscrete([16, 3])`, 192
+combinations down to 48. Every sample now goes into movement, which is the part
+that is actually hard. See `rl/combat.py` for what this gives up.
+
+### Action latency
+
+PPO credits the reward at step *t* to the action at step *t*. If the action does
+not reach the screen for three ticks, every one of those credits lands on the
+wrong decision, and no amount of reward shaping fixes it. Measure it first:
+
+```bash
+python scripts/measure_latency.py --serial <SERIAL>
+python scripts/train_rl.py --live --serial <SERIAL> --action-delay 2
+```
+
+`--action-delay N` puts the last N actions into the observation. That is the
+textbook fix rather than a hack: an MDP with a constant action delay is still
+Markov provided the recent actions are part of the state.
+
 ### Seeing what it decided (`--trace`)
 
 ```bash
@@ -357,7 +420,8 @@ and see what it would have done.
 
 | directory | design | obs |
 | --- | --- | --- |
-| `checkpoints_polar/` | current, `MultiDiscrete([16, 3, 2, 2])` | 60 |
+| `checkpoints_polar/` | previous, `MultiDiscrete([16, 3, 2, 2])` | 60 |
+| `checkpoints_move/` | current, `MultiDiscrete([16, 3])` | 60 (+5 per `--action-delay`) |
 
 Earlier designs (`checkpoints/` for the 8-way v3, `checkpoints_waypoint/` for the
 15×15 grid) have been deleted — their weights could never be loaded by this action
@@ -392,12 +456,9 @@ python scripts/run_prototype.py --video media/testvideos/test_game3.mp4 --start 
 # perception-only status loop:
 python scripts/run_live.py --video media/testvideos/test_game1.mp4
 
-# reward-engine unit tests (no cv2/gym needed):
-python scripts/test_rewards.py
-
-# planner tests: latching, A* around walls, wall clearance, map memory,
-# gas-ring escape, reward-shaping exploits  (38 tests, ~30s)
-python scripts/test_waypoint.py
+# the whole suite (planner, rewards, arena extraction, localiser)
+python -m pytest
+python -m pytest tests/test_planner.py -k gas      # or a slice of it
 
 # render one decision trace from a screenshot (no phone needed):
 python -m rl.debug_trace showdown.png     # -> debugOutput/trace/trace_0000.jpg
@@ -584,8 +645,8 @@ python scripts/train_rl.py --live --serial <SERIAL> --controls controls.json
 Offline mode is only for checking the pipeline — in a recording the agent's actions
 can't change the frames, so real policy learning happens live on the phone.
 
-**This design starts from scratch.** It writes to `brawlstars_ppo_polar.zip` and
-`checkpoints_polar/`, so it will not touch — or try to resume from — the v3
+**This design starts from scratch.** It writes to `brawlstars_move.zip` and
+`checkpoints_move/`, so it will not touch — or try to resume from — the v3
 `checkpoints/` or the 15×15 `checkpoints_waypoint/`. You do not need `--fresh`;
 you need it only to abandon a `_polar` run and restart. Re-running the same
 command resumes, and Ctrl+C saves first.

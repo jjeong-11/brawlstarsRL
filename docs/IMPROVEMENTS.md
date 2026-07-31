@@ -16,7 +16,7 @@ marginally better per sample.
 
 ## 1. Highest value
 
-### 1.1 The reward is dense but the credit assignment is ~2 seconds late
+### 1.1 The reward is dense but the credit assignment is ~2 seconds late  — **DONE**
 
 `Controls.hold_ms` is clamped to the tick period and `AdbExecutor` warns about
 queueing, which is the right instinct — but the loop still has the frame the
@@ -31,7 +31,7 @@ frames until the anchor's world velocity actually changes. If it is more than
 handful of lines and it is the single most likely reason a run "trains" without
 improving.
 
-### 1.2 Episodes are extremely long and the terminal reward is huge
+### 1.2 Episodes are extremely long and the terminal reward is huge  — **DONE**
 
 `win` is +50 and `placement` +3, against `survive` at +0.09/tick. A five-minute
 match at 10 Hz is ~3000 steps, so with `gamma=0.995` the discount over a full
@@ -71,7 +71,7 @@ live steps are the scarce resource.
 
 ## 2. Perception
 
-### 2.1 Terrain profiles do not scale
+### 2.1 Terrain profiles do not scale  — **DONE**
 
 Six hand-calibrated HSV profiles, and `select_profile` refuses below 30%
 coverage — at which point the planner loses all wall knowledge. Showdown rotates
@@ -88,7 +88,7 @@ first few in-match frames by k-means, instead of matching against a fixed table.
 `_auto_patches` already does most of this; it just is not wired into the live
 path.
 
-### 2.2 `ammo_known` is true on only ~15% of frames
+### 2.2 `ammo_known` is true on only ~15% of frames  — **DONE**
 
 The code is admirably careful about this (`_gate_weapons` refuses to trust a 0
 reading), but the underlying problem is that the ammo bar is only located
@@ -108,7 +108,7 @@ noted as the remaining gap in `state.MISSING_EXTRACTORS`.
 
 ## 3. RL design
 
-### 3.1 The observation has no history
+### 3.1 The observation has no history  — **DONE**
 
 60 dims, all describing the current instant except velocity and the previous
 action. The agent cannot represent "I have been walking into this wall for a
@@ -120,7 +120,7 @@ The planner status fields help a lot here, and adding two more would help more:
 whether the last decision was overridden (gas escape), and how long the current
 commitment has left in *seconds* rather than as a fraction.
 
-### 3.2 `ent_coef` is still probably too high
+### 3.2 `ent_coef` is still probably too high  — **DONE**
 
 The docstring already tells this story well — 0.03 was sized for a 3.58-nat
 action space and the polar space is 5.26 nats. At 0.01 the entropy bonus is
@@ -128,7 +128,7 @@ still ~0.05/step against a `survive` of 0.09/step, i.e. a third of the dense
 signal is being paid for randomness. Worth annealing: 0.01 → 0.002 over the
 first 200k steps.
 
-### 3.3 Attack and super are learned, but auto-aim means they barely need to be
+### 3.3 Attack and super are learned, but auto-aim means they barely need to be  — **DONE**
 
 Both are binary taps with auto-targeting. Given the gating in `_gate_weapons`
 already refuses shots that cannot land, a scripted "always attack when an enemy
@@ -136,7 +136,7 @@ is visible and ammo is known" policy is likely within a few percent of optimal �
 and would free the policy to spend its entire capacity on movement, which is the
 part that is actually hard. Worth A/B testing: it removes two action dimensions.
 
-### 3.4 Reward normalisation
+### 3.4 Reward normalisation  — **DONE**
 
 `VecNormalize(norm_reward=True)` is standard for a reward with terms spanning
 0.09 to 50. Without it the value function spends most of its capacity on the
@@ -146,7 +146,7 @@ rare large terms.
 
 ## 4. Engineering
 
-### 4.1 There is no test runner
+### 4.1 There is no test runner  — **DONE**
 
 Three separate `scripts/test_*.py` files, each with a hand-rolled
 `TESTS = [...]` list and a `main()` that counts failures. They work, and the
@@ -155,7 +155,7 @@ cannot be run as one suite, cannot be filtered, and CI cannot report them. Movin
 to `pytest` is mostly mechanical (the assertions are already plain `assert`) and
 would let `python -m pytest` be the one command.
 
-### 4.2 `env.py` is doing too much
+### 4.2 `env.py` is doing too much  — **DONE**
 
 847 lines covering the gym interface, menu navigation, wall-clock profiling, gas
 caching, camera tracking and spatial fusion. The menu navigation in particular
@@ -194,3 +194,40 @@ For reference, so the list above is not read as "nothing has been done".
 | tests | 31 → 38, with a named regression test per failure mode above |
 | hygiene | `.gitignore` inline-comment bug that left 229 data files tracked; 417 → 137 tracked files |
 | hygiene | 611 MB of committed video stripped from git history |
+| maps | `perception/mapdb.py` + `localize.py`: 71 arenas, absolute position, true borders |
+| perception | ammo decoupled from the HP digit line via a learned anchor offset |
+| perception | anchor selection seeded by its own previous position, not screen centre |
+| RL | attack/super scripted out of the action space (192 -> 48 combinations) |
+| RL | RecurrentPPO, gamma 0.999, ent_coef 0.004 + anneal, VecNormalize |
+| RL | `--action-delay N` puts recent actions in the observation |
+| eng | pytest suite under `tests/` (62 tests); menus split out of `env.py` |
+
+## 6. Still open after this pass
+
+**2.3 kill attribution** is the main perception gap. `rl/kills.py` infers a
+knockout from `players_left` decreasing, which in a 10-player Solo Showdown
+credits the agent for most kills it did not make — and `kill` is worth +5.0,
+second only to winning. The on-screen defeat banner is the ground truth. Three
+options, cheapest first:
+
+1. **Proximity + damage gating.** Only credit a kill when an enemy was within
+   attack range in the last second AND the agent fired. Cheap, no new detector,
+   and it removes the obviously-wrong credits.
+2. **Read the banner.** "<name> was defeated by <name>" appears top-centre for
+   ~2s. The username classifier already exists; the work is an ROI plus a
+   template match on "by". This is the correct fix.
+3. **Track enemy disappearance.** Correlate a tracked enemy vanishing with the
+   agent's own shots landing. Most robust, most work, and it needs enemy
+   tracking that does not exist yet.
+
+Until one of these lands, consider dropping `kill` to ~2.0 so a false credit
+costs less than a real one earns.
+
+**A/B the scripted combat.** Section 3.3 is done, but the claim that it beats
+the learned heads is a well-motivated guess, not a measurement. The test is the
+same number of live steps with `MultiDiscrete([16,3])` + script versus the old
+`[16,3,2,2]`.
+
+**Multi-phone (1.3) and behaviour cloning (1.4)** remain the two largest
+throughput wins and are both untouched: one phone for now, and the recordings
+were deleted.
