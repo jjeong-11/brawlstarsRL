@@ -279,12 +279,20 @@ def _trace_decision(tracer, frame, live, state, result, tick,
         obs = encode_observation(state, max_hp, (fw, fh),
                                  planner_status=planner.status())
         action, _ = policy.predict(obs, deterministic=False)
-        action = [int(v) for v in np.asarray(action).ravel()[:4]]
+        action = [int(v) for v in np.asarray(action).ravel()[:2]]
     else:
-        action = [int(np.random.randint(16)), int(np.random.randint(3)), 0, 0]
+        action = [int(np.random.randint(16)), int(np.random.randint(3))]
 
+    from rl.combat import CombatPolicy
+    global _COMBAT
+    try:
+        _COMBAT
+    except NameError:
+        _COMBAT = CombatPolicy()
+    combat = _COMBAT.decide(state, frame_size=(fw, fh), world=planner.world)
     intent = decode_action(action, state=state, frame_size=(fw, fh), planner=planner,
-                           terrain=terrain, camera_delta=camera_delta, gas_grid=gas)
+                           terrain=terrain, camera_delta=camera_delta, gas_grid=gas,
+                           combat=combat)
     tracer.capture(frame, planner, state, intent=intent, reward=result,
                    live=live, tick=tick, force=True)
 

@@ -145,6 +145,11 @@ class WorldMap:
         self._clearance_stamp = -1
         self._stamp = 0
         self.have_terrain = False
+        # Ground-truth layout from perception.localize, once the arena is
+        # identified. None until then -- everything works without it.
+        self.reference_occ: Optional[np.ndarray] = None
+        self.reference_in_bounds: Optional[np.ndarray] = None
+        self.have_reference = False
 
     def reset(self) -> None:
         """Forget everything (new match, possibly a new map)."""
@@ -235,9 +240,16 @@ class WorldMap:
         if sx == 0 and sy == 0:
             return
 
-        for arr, fill in ((self.occ_p, cfg.occ_prior), (self.bush, 0.0),
-                          (self.gas, 0.0), (self.seen, 0.0),
-                          (self.seen_gas, 0.0)):
+        rolling = [(self.occ_p, cfg.occ_prior), (self.bush, 0.0),
+                   (self.gas, 0.0), (self.seen, 0.0), (self.seen_gas, 0.0)]
+        if self.reference_occ is not None:
+            # The reference is registered to THIS array, so it has to move with
+            # it. Newly exposed edges are filled BLOCKED rather than free: they
+            # are off the side of everything we know, and the localiser will
+            # re-lay the reference on its next update anyway.
+            rolling.append((self.reference_occ, True))
+            rolling.append((self.reference_in_bounds, False))
+        for arr, fill in rolling:
             arr[...] = np.roll(arr, (sy, sx), axis=(0, 1))
             if sx > 0:
                 arr[:, :sx] = fill
@@ -307,10 +319,68 @@ class WorldMap:
         ts += 0.5 * (1.0 - ts)
 
     # ------------------------------------------------------------------ #
+    def apply_reference(self, pose) -> None:
+        """Adopt a ground-truth layout from `perception.localize`.
+
+        Once the arena is identified, everything the agent has NOT looked at
+        stops being a guess. Two things change, and the second is the one that
+        matters:
+
+          * Unobserved cells fall back to the published layout instead of the
+            optimistic `occ_prior`. Slightly conservative — the layout counts
+            bushes as blocked (see `perception/mapdb.py`) — but it is real
+            information about ground the agent has never seen, which nothing
+            else in the pipeline can supply.
+          * Everything outside the arena becomes BLOCKED, exactly. The planner
+            currently infers "near the edge" from how much unwalkable
+            decoration surrounds a cell and spends a whole `border_cost` term
+            compensating for the fact that this is only a proxy. With a real
+            boundary it is not a proxy any more.
+
+        Observed cells keep their FUSED value. The live grid is the authority
+        on what is walkable right now — it knows bushes are passable and it
+        sees boxes that the static layout cannot.
+        """
+        gm = pose.game_map
+        ref = gm.occupancy
+        rh, rw = ref.shape
+        ys, xs = np.mgrid[0:self.gh, 0:self.gw]
+        mx = np.floor(pose.origin[0] + xs / pose.scale).astype(np.int32)
+        my = np.floor(pose.origin[1] + ys / pose.scale).astype(np.int32)
+        inside = (mx >= 0) & (mx < rw) & (my >= 0) & (my < rh)
+
+        # Off the edge of the arena is blocked, not unknown.
+        out = np.ones((self.gh, self.gw), bool)
+        out[inside] = ref[my[inside], mx[inside]]
+        self.reference_occ = out
+        self.reference_in_bounds = inside & np.where(
+            inside, gm.in_bounds[np.clip(my, 0, rh - 1), np.clip(mx, 0, rw - 1)], False)
+        self.have_reference = True
+
+    def clear_reference(self) -> None:
+        self.reference_occ = None
+        self.reference_in_bounds = None
+        self.have_reference = False
+
     @property
     def occupancy(self) -> np.ndarray:
-        """Boolean blocked mask over the whole map."""
-        return self.occ_p > self.config.occ_threshold
+        """Boolean blocked mask over the whole map.
+
+        Observed cells come from fused observation; unobserved cells come from
+        the reference layout when one is attached, and from the prior otherwise.
+        """
+        occ = self.occ_p > self.config.occ_threshold
+        if self.have_reference and self.reference_occ is not None:
+            unseen = self.seen < 0.15
+            occ = np.where(unseen, self.reference_occ, occ)
+        return occ
+
+    @property
+    def out_of_bounds(self) -> np.ndarray:
+        """Cells outside the arena. All False without a reference map."""
+        if self.have_reference and self.reference_in_bounds is not None:
+            return ~self.reference_in_bounds
+        return np.zeros((self.gh, self.gw), bool)
 
     @property
     def unexplored(self) -> np.ndarray:

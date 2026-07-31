@@ -5,18 +5,22 @@ rl/actions.py
 What the policy can do, and how a chosen action becomes real touch input on the
 Android device running Brawl Stars.
 
-Action space (tap-based, NO aiming) — ``MultiDiscrete([16, 3, 2, 2])``:
+Action space (movement only) — ``MultiDiscrete([16, 3])``:
 
     head 0  heading  : 0-15, clockwise from screen-right (22.5 deg per step)
     head 1  distance : 0 near · 1 mid · 2 far — how far to commit
-    head 2  attack   : 0 no · 1 tap   (auto-aims at the nearest enemy)
-    head 3  super    : 0 no · 1 tap   (auto-aims at the nearest enemy)
 
 The policy chooses *where* to go, and the planner in ``rl/path_planner.py``
 latches that destination in world space and routes to it with A* over the
-terrain grid until it is reached. Attack and super remain independent taps, and
-unlike the movement heads they are honoured on EVERY step — the agent can keep
-shooting while walking a committed route.
+terrain grid until it is reached.
+
+ATTACK AND SUPER ARE NOT IN THE ACTION SPACE. Brawl Stars auto-aims a plain
+tap at the nearest enemy, so there is no aiming decision to learn and the whole
+content of "should I shoot" is "is there a target in range and do I have ammo"
+— which the env was already enforcing by overriding the policy's choice. They
+are now decided by ``rl/combat.CombatPolicy`` and passed in here. See that
+module for the argument and for what it gives up. This took the space from 192
+combinations to 48.
 
 WHY POLAR AND NOT A GRID
     An earlier version used a 15x15 player-centred grid: 225 movement actions,
@@ -58,7 +62,7 @@ _DIST_LABEL = ("near", "mid", "far")
 
 
 def make_action_space():
-    nvec = [N_HEADINGS, N_DISTANCES, 2, 2]
+    nvec = [N_HEADINGS, N_DISTANCES]
     return spaces.MultiDiscrete(nvec) if spaces else {"type": "MultiDiscrete", "nvec": nvec}
 
 
@@ -85,7 +89,8 @@ class Intent:
 
 def decode_action(action, state=None, frame_size=(1280, 720),
                   planner: Optional[WaypointPlanner] = None,
-                  terrain=None, camera_delta=(0.0, 0.0), gas_grid=None) -> Intent:
+                  terrain=None, camera_delta=(0.0, 0.0), gas_grid=None,
+                  combat=(False, False)) -> Intent:
     """Decode ``[heading, distance, attack, super]`` into an Intent.
 
     `terrain`, `gas_grid` and `camera_delta` come from the env's per-tick
@@ -97,10 +102,10 @@ def decode_action(action, state=None, frame_size=(1280, 720),
     matching colour profile, so on an uncalibrated map gas is available when
     terrain is not. Folding it into `terrain` would throw that away.
     """
-    if not hasattr(action, "__len__") or len(action) < 4:
-        raise ValueError("expected polar action [heading, distance, attack, super]")
-    heading, dist, attack, super_ = (int(action[0]), int(action[1]),
-                                     int(action[2]), int(action[3]))
+    if not hasattr(action, "__len__") or len(action) < 2:
+        raise ValueError("expected polar action [heading, distance]")
+    heading, dist = int(action[0]), int(action[1])
+    attack, super_ = (1 if combat[0] else 0), (1 if combat[1] else 0)
     heading %= N_HEADINGS
     dist = max(0, min(N_DISTANCES - 1, dist))
 
@@ -123,10 +128,12 @@ class ActionExecutor:
     """Interface: consume an action, drive the device."""
 
     def apply(self, action, state=None, frame_size=(1280, 720), planner=None,
-              terrain=None, camera_delta=(0.0, 0.0), gas_grid=None) -> Intent:
+              terrain=None, camera_delta=(0.0, 0.0), gas_grid=None,
+              combat=(False, False)) -> Intent:
         intent = decode_action(action, state=state, frame_size=frame_size,
                                planner=planner, terrain=terrain,
-                               camera_delta=camera_delta, gas_grid=gas_grid)
+                               camera_delta=camera_delta, gas_grid=gas_grid,
+                               combat=combat)
         self._execute(intent)
         return intent
 

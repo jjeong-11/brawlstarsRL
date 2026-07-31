@@ -456,7 +456,7 @@ if __name__ == "__main__":
 
     tracer = DecisionTracer(TraceConfig(every_seconds=0.0))
     from rl.actions import decode_action
-    intent = decode_action([args.heading, args.dist, 0, 0], state=state,
+    intent = decode_action([args.heading, args.dist], state=state,
                            frame_size=(img.shape[1], img.shape[0]),
                            planner=planner, terrain=terrain, gas_grid=gas["grid"])
     path = tracer.capture(img, planner, state, intent, None, tick=0, force=True)

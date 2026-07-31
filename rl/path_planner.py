@@ -254,14 +254,28 @@ class WaypointPlanner:
     """Latches a destination, routes to it with A*, emits a joystick vector."""
 
     def __init__(self, config: Optional[PathPlannerConfig] = None,
-                 world_config: Optional[WorldMapConfig] = None):
+                 world_config: Optional[WorldMapConfig] = None,
+                 localize: bool = True):
         self.config = config or PathPlannerConfig()
         self.world = WorldMap(world_config)
+        # Arena identification against the published layouts. Entirely
+        # optional: without it (no map database, never enough explored, a skin
+        # we cannot segment) the planner behaves exactly as it did before, on
+        # the locally fused map alone.
+        self.localizer = None
+        if localize:
+            try:
+                from perception.localize import Localizer
+                self.localizer = Localizer()
+            except Exception:
+                self.localizer = None
         self.reset()
 
     # ------------------------------------------------------------------ #
     def reset(self) -> None:
         self.world.reset()
+        if self.localizer is not None:
+            self.localizer.reset()      # the next match may be a different arena
         # The waypoint lives in WORLD MAP CELLS, not screen pixels. The map
         # keeps itself registered, so the destination needs no per-tick camera
         # correction and stays meaningful after it scrolls off screen.
@@ -353,6 +367,7 @@ class WaypointPlanner:
         if terrain is not None and terrain.get("gas") is not None:
             gas = terrain["gas"]
         self.world.update(terrain, gas, camera_delta)
+        self._localize(camera_delta)
 
         player = getattr(state, "player_pos", None) if state is not None else None
         if player is None:
@@ -462,6 +477,31 @@ class WaypointPlanner:
         return move
 
     # ------------------------------------------------------------------ #
+    def _localize(self, camera_delta) -> None:
+        """Try to identify the arena, and adopt its layout once we have.
+
+        Runs on the ACCUMULATED map rather than this frame, because a single
+        viewport does not carry enough structure to pick one arena out of 71 --
+        see the measured table in `perception/localize.py`. That also means
+        this does nothing for the first few seconds of a match, which is fine:
+        the local map is what the planner used before this existed.
+        """
+        if self.localizer is None or not self.world.ready():
+            return
+        cw, ch = self.world.cell
+        delta_cells = (camera_delta[0] / max(cw, 1e-6),
+                       camera_delta[1] / max(ch, 1e-6))
+        try:
+            pose = self.localizer.update(self.world.occ_p > self.world.config.occ_threshold,
+                                         self.world.seen > 0.15, delta_cells)
+        except Exception:
+            return
+        if pose is None:
+            if self.world.have_reference and self.localizer.pose is None:
+                self.world.clear_reference()   # lock was abandoned
+            return
+        self.world.apply_reference(pose)
+
     def _smooth(self, move) -> Tuple[float, float]:
         """Low-pass the joystick direction (see `steer_smoothing`)."""
         a = self.config.steer_smoothing
@@ -635,6 +675,12 @@ class WaypointPlanner:
             cost += cfg.enemy_cost * risk ** 2
 
         cost[occ] = np.inf
+        # Outside the arena is not expensive, it is impossible. Known exactly
+        # once the map is identified; all-False otherwise, so this is a no-op
+        # until then.
+        oob = world.out_of_bounds
+        if oob.any():
+            cost[oob] = np.inf
         if inflate and cfg.hard_clearance > 0:
             cost[clear < cfg.hard_clearance] = np.inf
         return cost

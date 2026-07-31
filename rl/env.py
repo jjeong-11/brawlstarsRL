@@ -61,6 +61,7 @@ from .path_planner import WaypointPlanner, PlannerStatus
 from .rewards import RewardCalculator, RewardConfig
 from .state import GameState, adapt_live_state
 from .kills import KillAttributor
+from .combat import CombatPolicy
 
 N_ENEMY_SLOTS = 3          # nearest N enemies encoded individually
 N_BOX_SLOTS = 2            # nearest N power-cube boxes encoded individually
@@ -77,10 +78,6 @@ OBS_DIM = 18 + _ENTITY_DIM + _MOTION_DIM + _PREV_ACTION_DIM + _PLANNER_DIM  # = 
 # ~0.1s tick this is comfortably above the real maximum and keeps the feature
 # inside [0, 1] without clipping normal movement flat.
 _VEL_SCALE = 60.0
-
-# Super charge at which the button is actually usable. Mirrors
-# perception.getSuper.READY_CHARGE; tapping below this does nothing at all.
-_SUPER_READY = 0.9
 
 # How many steps a gas grid may be reused before it is recomputed.
 #
@@ -232,8 +229,13 @@ def encode_observation(state: GameState, max_health: float,
         obs += [0.5, 0.5, 0.0, 0.0, 0.0]
     else:
         from .actions import N_HEADINGS, N_DISTANCES
-        heading, dist, atk, sup = (int(prev_action[0]), int(prev_action[1]),
-                                   int(prev_action[2]), int(prev_action[3]))
+        # Intent.raw is still (heading, dist, attack, super) even though the
+        # last two are scripted now: what the agent DID last tick is useful
+        # context whether or not it chose it, and keeping the layout means the
+        # observation width does not change.
+        heading, dist = int(prev_action[0]), int(prev_action[1])
+        atk = int(prev_action[2]) if len(prev_action) > 2 else 0
+        sup = int(prev_action[3]) if len(prev_action) > 3 else 0
         angle = 2.0 * np.pi * (heading % N_HEADINGS) / N_HEADINGS
         obs += [
             float(np.cos(angle) * 0.5 + 0.5),
@@ -307,6 +309,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self.super_charge_fn = super_charge_fn
         self.kills_fn = kills_fn
         self.kill_attr = KillAttributor()   # default kill attribution
+        self.combat = CombatPolicy()        # scripted attack/super
         # Anti-idle: positives are withheld unless the agent moved within this many
         # seconds. Attack is also suppressed unless an enemy is visible.
         self.move_window_seconds = move_window_seconds
@@ -381,6 +384,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self.perception = LivePerception()   # fresh smoothing state per episode
         self.reward_calc.reset()
         self.kill_attr.reset()
+        self.combat.reset()
         self.path_planner.reset()      # drop any commitment from the last match
         self.camera.reset()            # and any cross-match frame correlation
         self.terrain_profiles.reset()  # the next match may be a different map
@@ -483,49 +487,21 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
                       f"{prof['taps']} taps | grab {prof['grab']:.1f}s "
                       f"classify {prof['classify']:.1f}s sleep {prof['sleep']:.1f}s")
 
-    def _gate_weapons(self, action):
-        """Suppress shots that provably cannot do anything.
+    def _combat(self):
+        """Scripted attack/super for this step. See rl/combat.py.
 
-        A tap with an empty clip, or a super tap at zero charge, is a pure
-        no-op: it costs a frame, changes nothing, and teaches the policy
-        nothing, because the outcome is identical whether it fired or not.
-        Measured on a rollout before this gate existed: 89% of attacks were
-        fired with an empty clip and 100% of supers were fired uncharged.
-
-        Gating here rather than through the reward is the same trade as the gas
-        cost layer -- it works from the first frame and costs no samples. The
-        reward's attack_cost handles the shots that are merely UNLIKELY to land,
-        which no gate can know about.
-
-        The gates are deliberately asymmetric about uncertainty:
-          * enemy visible  — required. Auto-aim has nothing to aim at otherwise.
-          * ammo           — only when the reading is TRUSTED (`ammo_known`).
-                             A failed read also reports 0, and the bar is only
-                             located on ~15% of real frames, so trusting the
-                             count alone would block nearly every attack.
-          * super charge   — always applied. This comes from a fixed HUD ROI
-                             that is never occluded, so 0.0 means uncharged
-                             rather than unknown.
+        This replaces `_gate_weapons`, which took the policy's attack and super
+        heads and overrode them whenever they could not possibly work. Once the
+        override is doing the real deciding, the heads are decoration -- so they
+        were removed from the action space and the rule moved somewhere it can
+        be read and tested on its own.
         """
-        if not hasattr(action, "__len__") or len(action) < 4:
-            return action, False, False
-        st = self._last_state
-        want_attack, want_super = int(action[2]) == 1, int(action[3]) == 1
-
-        allow_attack = want_attack and self._last_enemy_count >= 1
-        if allow_attack and st.ammo_known and st.ammo_count < 1:
-            allow_attack = False
-        allow_super = want_super and (st.super_charge or 0.0) >= _SUPER_READY
-
-        if allow_attack != want_attack or allow_super != want_super:
-            action = list(action)
-            action[2] = 1 if allow_attack else 0
-            action[3] = 1 if allow_super else 0
-        return action, allow_attack, allow_super
+        return self.combat.decide(self._last_state, frame_size=self.frame_size,
+                                  world=self.path_planner.world)
 
     def step(self, action):
         t_step = time.perf_counter()
-        action, fired_attack, fired_super = self._gate_weapons(action)
+        fired_attack, fired_super = self._combat()
 
         t0 = time.perf_counter()
         intent = self.executor.apply(action, state=self._last_state,
@@ -533,7 +509,8 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
                                      planner=self.path_planner,
                                      terrain=self._terrain,
                                      camera_delta=self._camera_delta,
-                                     gas_grid=self._gas_grid_now)  # 1) act
+                                     gas_grid=self._gas_grid_now,
+                                     combat=(fired_attack, fired_super))  # 1) act
         self._prof["act"] += time.perf_counter() - t0
 
         self._prev_action = intent.raw
@@ -600,7 +577,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         direction), but the expensive capture + perception + reward runs only once
         per decision (on the final, full step()).
         """
-        action, _, _ = self._gate_weapons(action)
+        combat = self._combat()
         # No fresh frame here, so no camera delta to apply: passing (0, 0) keeps
         # the latched waypoint where it is rather than drifting it by a stale
         # measurement that has already been consumed.
@@ -609,7 +586,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
                                      planner=self.path_planner,
                                      terrain=self._terrain,
                                      camera_delta=(0.0, 0.0),
-                                     gas_grid=None)
+                                     gas_grid=None, combat=combat)
         if intent.move != (0.0, 0.0):
             self._last_move_t = time.time()
         self._pace()

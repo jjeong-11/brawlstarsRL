@@ -259,7 +259,9 @@ def test_action_space_matches_planner():
         "every distance tier needs a commitment length")
     space = make_action_space()
     nvec = list(space["nvec"] if isinstance(space, dict) else space.nvec)
-    assert nvec == [16, 3, 2, 2], nvec
+    # Movement only. Attack and super moved to rl/combat.py, which is why this
+    # is [16, 3] and not [16, 3, 2, 2].
+    assert nvec == [16, 3], nvec
     print(f"  action space {nvec} agrees with the planner config")
     return True
 
@@ -880,53 +882,68 @@ def test_gas_and_bush_are_separable():
     return True
 
 
-def _gate_env(**state_kw):
-    """A bare env with a hand-set _last_state, for exercising _gate_weapons."""
-    from rl.env import BrawlStarsEnv
-    from rl.actions import LoggingExecutor
-    env = BrawlStarsEnv(source_factory=None, executor=LoggingExecutor())
-    env._last_state = GameState(**state_kw)
-    env._last_enemy_count = len(state_kw.get("enemy_positions", []) or [])
-    return env
+def _combat_state(**state_kw):
+    state_kw.setdefault("frame_size", (VIEW_W, VIEW_H))
+    return GameState(**state_kw)
 
 
-def test_weapon_gating():
-    """Shots that provably cannot do anything must never reach the device."""
-    enemy = {"enemy_positions": [(500, 500)], "player_pos": (960, 540)}
-    want = [0, 0, 1, 1]     # policy asks to fire both every time
+def test_combat_script():
+    """Shots that provably cannot do anything must never reach the device.
 
-    # 1. No enemy visible -> attack blocked (auto-aim has no target).
-    env = _gate_env(player_pos=(960, 540), ammo_count=3, ammo_known=True,
-                    super_charge=1.0)
-    _, a, s = env._gate_weapons(list(want))
-    assert not a, "attacked with no enemy visible"
-    assert s, "super blocked despite being charged"
+    This used to test `env._gate_weapons`, which overrode the policy's attack
+    and super heads. The rule is the same; it now lives in rl/combat.py and
+    DECIDES rather than vetoes, because once the veto is doing the real
+    deciding the heads are decoration (see that module).
+    """
+    from rl.combat import CombatPolicy, CombatConfig
+
+    cfg = CombatConfig()
+    near = (VIEW_W // 2 + 200, VIEW_H // 2)          # well inside max_range
+    player = (VIEW_W // 2, VIEW_H // 2)
+
+    # 1. No enemy visible -> nothing fires, however charged we are.
+    a, s = CombatPolicy().decide(_combat_state(player_pos=player, ammo_count=3,
+                                               ammo_known=True, super_charge=1.0))
+    assert not a and not s, "fired with no enemy visible"
 
     # 2. Enemy visible, clip empty AND the reading is trusted -> blocked.
-    env = _gate_env(ammo_count=0, ammo_known=True, super_charge=0.0, **enemy)
-    _, a, s = env._gate_weapons(list(want))
+    a, s = CombatPolicy().decide(_combat_state(
+        player_pos=player, enemy_positions=[near],
+        ammo_count=0, ammo_known=True, super_charge=0.0))
     assert not a, "attacked with a confirmed-empty clip"
     assert not s, "fired an uncharged super"
 
     # 3. Same, but the ammo reading is NOT trusted -> attack allowed.
-    # This is the important one: a failed read also reports 0, and the ammo bar
-    # is only located on ~8% of real frames. Trusting the count alone would
+    # The important one: a failed read also reports 0, and the ammo bar is only
+    # located on a minority of real frames. Trusting the count alone would
     # block essentially every attack the agent ever tries.
-    env = _gate_env(ammo_count=0, ammo_known=False, super_charge=0.0, **enemy)
-    _, a, _ = env._gate_weapons(list(want))
+    a, _ = CombatPolicy().decide(_combat_state(
+        player_pos=player, enemy_positions=[near],
+        ammo_count=0, ammo_known=False, super_charge=0.0))
     assert a, "blocked an attack on an UNTRUSTED ammo reading"
 
-    # 4. Everything available -> both pass through untouched.
-    env = _gate_env(ammo_count=2, ammo_known=True, super_charge=1.0, **enemy)
-    act, a, s = env._gate_weapons(list(want))
-    assert a and s and list(act) == want, act
+    # 4. Everything available -> both fire.
+    a, s = CombatPolicy().decide(_combat_state(
+        player_pos=player, enemy_positions=[near],
+        ammo_count=2, ammo_known=True, super_charge=1.0))
+    assert a and s, (a, s)
 
-    # 5. The policy declining to fire is never overridden into firing.
-    env = _gate_env(ammo_count=3, ammo_known=True, super_charge=1.0, **enemy)
-    _, a, s = env._gate_weapons([0, 0, 0, 0])
-    assert not a and not s
-    print("  blocked: no-target, empty-clip, uncharged-super; "
-          "allowed: untrusted ammo, ready weapons")
+    # 5. An enemy way out of auto-aim range is not worth revealing position for.
+    far = (VIEW_W // 2 + int(cfg.max_range_frac * VIEW_H) + 120, VIEW_H // 2)
+    a, s = CombatPolicy().decide(_combat_state(
+        player_pos=player, enemy_positions=[far],
+        ammo_count=3, ammo_known=True, super_charge=1.0))
+    assert not a, "fired at a target beyond auto-aim range"
+
+    # 6. Super does not machine-gun itself while the charge readout catches up.
+    pol = CombatPolicy()
+    st = _combat_state(player_pos=player, enemy_positions=[near],
+                       ammo_count=3, ammo_known=True, super_charge=1.0)
+    supers = sum(pol.decide(st)[1] for _ in range(cfg.super_cooldown_ticks))
+    assert supers == 1, f"fired {supers} supers inside the cooldown window"
+
+    print("  blocked: no-target, empty-clip, uncharged-super, out-of-range; "
+          "allowed: untrusted ammo, ready weapons; super rate-limited")
     return True
 
 
@@ -1390,7 +1407,7 @@ TESTS = [
     ("perception survives no anchor", test_perception_survives_no_anchor),
     ("boxes interrupt a commitment", test_boxes_interrupt_a_commitment),
     ("cube counter not gated on verified anchor", test_cube_counter_not_gated_on_verified_anchor),
-    ("weapon gating", test_weapon_gating),
+    ("combat script", test_combat_script),
     ("healing rewarded, not farmable", test_healing_is_rewarded_and_not_farmable),
     ("firing costs charged correctly", test_firing_costs_are_charged_only_when_fired),
     ("terrain profiles select correctly", test_terrain_profiles_select_correctly),
