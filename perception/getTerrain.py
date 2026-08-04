@@ -21,7 +21,7 @@ Showdown rotates map skins with completely different palettes, and a single set
 of HSV bounds does not survive that. Two maps measured from this project's own
 recordings:
 
-    class   night_teal (showdown.png)      purple_stone (test_game2.mp4)
+    class   night_teal (fixtures/showdown.png)   purple_stone (test_game2.mp4)
     -----   -------------------------      -----------------------------
     floor   H 124-128  S 114-119  V  76-82  H 130-141  S 157-203  V 104-125
     wall    H 118-120  S 114-131  V  77-184 H 128-130  S 178-193  V 137-198
@@ -96,7 +96,7 @@ NIGHT_TEAL = TerrainProfile(
     floor=(np.array([123, 100, 55]), np.array([130, 135, 100])),
     wall=(np.array([113, 95, 70]), np.array([122, 145, 255])),
     bush=(np.array([88, 170, 80]), np.array([102, 255, 255])),
-    notes="showdown.png. Matte purple floor, teal bushes. Floor/wall split by HUE.",
+    notes="media/fixtures/showdown.png. Matte purple floor, teal bushes. Floor/wall split by HUE.",
 )
 
 PURPLE_STONE = TerrainProfile(
@@ -185,7 +185,7 @@ WALKABLE_FRACTION = 0.55
 # HUD overlays sit ON TOP of real terrain, so the pixels underneath cannot be
 # classified. These regions are marked UNKNOWN and inherit the walkability of
 # their neighbours rather than becoming phantom walls. Fractions of the PLAY
-# RECT (letterbox excluded), measured on showdown.png.
+# RECT (letterbox excluded), measured on media/fixtures/showdown.png.
 _HUD_CIRCLES = (   # (cx, cy, r)
     (0.150, 0.757, 0.150),   # movement joystick + its outer ring
     (0.915, 0.808, 0.115),   # attack button + ring
@@ -528,7 +528,7 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     root = Path(__file__).resolve().parent.parent
-    path = args.image or str(root / "showdown.png")
+    path = args.image or str(root / "media" / "fixtures" / "showdown.png")
     image = cv2.imread(path)
     if image is None:
         raise SystemExit(f"could not read {path}")

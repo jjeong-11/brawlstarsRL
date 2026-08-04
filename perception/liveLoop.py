@@ -37,7 +37,8 @@ import numpy as np
 # repo-root/debugOutput, independent of the current working directory
 _DEBUG_DIR = Path(__file__).resolve().parent.parent / "debugOutput"
 
-from .getAnchor import find_player_position, find_player_position_ex
+from .getAnchor import (find_player_position, find_player_position_ex,
+                        find_player_position_full)
 from .getHealth import find_health_info
 from .getAmmo import find_ammo_info, AmmoLocator
 from .getCube import find_cube_info
@@ -294,6 +295,7 @@ class LivePerception:
             "ammo": None,
             "ammo_known": False,
             "anchor_fresh": False,
+            "anchor_source": "none",
             "hud_cubes": None,
             "enemies": [],
             "boxes": [],
@@ -414,9 +416,14 @@ class LivePerception:
             # frames, so his own last position discriminates far better than
             # "nearest the screen centre", which an enemy standing inboard of
             # him satisfies just as well. See find_player_position_ex.
-            ax, ay, ar, verified = find_player_position_ex(
+            _res = find_player_position_full(
                 frame, hsv=hsv, prior=(c["anchor"][0], c["anchor"][1]) if c["anchor"] else None)
+            ax, ay, ar, verified = _res.x, _res.y, _res.radius, _res.verified
             raw_anchor = (ax, ay, ar)
+            # Which strategy produced this, so a WRONG anchor and a MISSING
+            # anchor can be told apart in the logs. They are different bugs with
+            # different fixes and both arrive as a well-formed (x, y, radius).
+            c["anchor_source"] = _res.source
 
             # getAnchor now reports radius 0 when it could not VERIFY the
             # player (no readable HP number above a ring) rather than

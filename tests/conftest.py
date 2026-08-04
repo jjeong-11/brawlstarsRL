@@ -12,6 +12,7 @@ import sys
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+FIXTURES = ROOT / "media" / "fixtures"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -30,7 +31,7 @@ def showdown_frame():
     much -- but it means they cannot run without the fixture.
     """
     import cv2
-    img = cv2.imread(str(ROOT / "showdown.png"))
+    img = cv2.imread(str(FIXTURES / "showdown.png"))
     if img is None:
-        pytest.skip("showdown.png not present")
+        pytest.skip("media/fixtures/showdown.png not present")
     return img

@@ -18,7 +18,7 @@ GOLD_UPPER = np.array([35, 255, 255])
 LOADING_CENTER_GOLD_MIN = 0.28
 
 # Mid-match death/spectate screen ("Defeated" + Exit button), measured on
-# defeated.png (2424x1080): title-region white frac 0.213 vs 0.030 in-match;
+# media/fixtures/defeated.png (2424x1080): title-region white frac 0.213 vs 0.030 in-match;
 # exit-button-region white frac 0.119 vs 0.000 on every other screen tested.
 # Both cues must fire, so a stray white effect can't fake a death.
 WHITE_TEXT_LOWER = np.array([0, 0, 190])

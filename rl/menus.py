@@ -29,7 +29,7 @@ import time
 from perception.getGameState import get_game_state
 
 # Menu button positions as screen fractions, measured on 2424x1080 reference
-# screenshots (defeated.png / endMenu.png at the repo root).
+# screenshots (media/fixtures/defeated.png, media/fixtures/endMenu.png).
 EXIT_BUTTON_NORM = (0.538, 0.922)          # "Exit" on the defeated screen
 PLAY_AGAIN_BUTTON_NORM = (0.7376, 0.9167)  # "Play Again" on the end menu
 NAVIGATE_TIMEOUT = 180.0   # give up navigating after this many seconds

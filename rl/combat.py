@@ -79,6 +79,16 @@ class CombatConfig:
     # the rest on empty air.
     super_cooldown_ticks: int = 12
 
+    # NOT CONSULTED YET -- the seam for rl/line_of_sight.py, recorded here so
+    # the decision has somewhere to live when it is made.
+    #
+    # Whether a wall between us and the target should hold fire. It is a
+    # PER-BRAWLER fact, not a general one: throwers arc over walls, melee have
+    # no projectile, Rico banks off them, and several supers break them, so
+    # "blocked -> do not fire" is correct for plain shooters and wrong for
+    # everyone else. Default False = behave exactly as before.
+    wall_blocks_shots: bool = False
+
 
 class CombatPolicy:
     """Decides attack/super from the state. Pure and cheap; no learning."""

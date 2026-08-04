@@ -204,7 +204,7 @@ For reference, so the list above is not read as "nothing has been done".
 
 ## 6. Performance
 
-Measured per in-match step, capture excluded (`showdown.png`, forced in-match
+Measured per in-match step, capture excluded (`media/fixtures/showdown.png`, forced in-match
 path, 500 steps):
 
 | stage | ms | note |
@@ -248,6 +248,3 @@ the learned heads is a well-motivated guess, not a measurement. The test is the
 same number of live steps with `MultiDiscrete([16,3])` + script versus the old
 `[16,3,2,2]`.
 
-**Multi-phone (1.3) and behaviour cloning (1.4)** remain the two largest
-throughput wins and are both untouched: one phone for now, and the recordings
-were deleted.

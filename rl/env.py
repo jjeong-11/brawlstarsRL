@@ -355,6 +355,13 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self.source = None
         self._tick = 0
         self._last_state = GameState()
+
+        # Match bookkeeping for the banner printed at the start of every game.
+        # Without it a live run is a silent wall of SB3 numbers with no way to
+        # tell where one match ended and the next began -- which is the frame of
+        # reference for everything else in the log.
+        self.episode = 0
+        self._episode_started_at = None
         self.path_planner = WaypointPlanner(_planner_config_for(tick_seconds))
         self.camera = CameraTracker()
 
@@ -403,6 +410,10 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         from collections import deque
         if _GYM:
             super().reset(seed=seed)
+        # Snapshot the match that just finished BEFORE anything is cleared: the
+        # calls below zero the reward accumulator and the tick counter.
+        last = self._episode_summary()
+
         if self.source is not None:
             self.source.close()
         self.source = self.source_factory() if self.source_factory else None
@@ -410,6 +421,9 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         navigate_to_match(self.source, self.executor,
                           verbose=bool(self.profile_every))
         _nav = time.perf_counter() - _t_nav
+        self.episode += 1
+        self._episode_started_at = time.time()
+        self._announce_game(last)
         self.perception = LivePerception()   # fresh smoothing state per episode
         self.reward_calc.reset()
         self.kill_attr.reset()
@@ -446,6 +460,58 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self._prof["reset_wait"] = keep_wait
         self._prof["resets"] = keep_n
         return self._encode(state), {"state": state}
+
+    # ------------------------------------------------------------------ #
+    def _episode_summary(self) -> Optional[dict]:
+        """How the match that just ended went, or None if there wasn't one.
+
+        Must be called at the TOP of reset(): `reward_calc.reset()` zeroes the
+        episode return and breakdown a few lines later.
+        """
+        if not self.episode or self._episode_started_at is None:
+            return None
+        s = self._last_state
+        if s.won:
+            outcome = "WON"
+        elif s.match_over:
+            outcome = f"lost (rank {s.final_rank})" if s.final_rank else "lost"
+        elif not s.is_alive:
+            outcome = f"died (rank {s.final_rank})" if s.final_rank else "died"
+        else:
+            outcome = "cut short"          # truncation, Ctrl+C, dropped feed
+        return {
+            "n": self.episode,
+            "ticks": self._tick,
+            "seconds": time.time() - self._episode_started_at,
+            "return": float(self.reward_calc.episode_return),
+            "outcome": outcome,
+            "breakdown": dict(self.reward_calc.episode_breakdown),
+        }
+
+    def _announce_game(self, last: Optional[dict]) -> None:
+        """Say on the terminal that a new match has started.
+
+        A live run otherwise prints nothing between matches, so the SB3 output
+        is one undifferentiated stream and there is no way to tell which numbers
+        belong to which game -- or that a reset silently failed and the agent
+        has been sitting on a menu for five minutes. The previous match's
+        outcome goes here too, because the moment you want it is exactly when
+        the next one starts.
+        """
+        bar = "=" * 62
+        print(f"\n{bar}")
+        print(f"  GAME {self.episode}  started {time.strftime('%H:%M:%S')}")
+        if last is None:
+            print("  previous: none (first game of this run)")
+        else:
+            print(f"  previous: game {last['n']} — {last['outcome']} | "
+                  f"{last['ticks']} ticks in {last['seconds']:.0f}s | "
+                  f"return {last['return']:+.2f}")
+            top = sorted(last["breakdown"].items(), key=lambda kv: -abs(kv[1]))[:5]
+            if top:
+                print("            " + "  ".join(f"{k}={v:+.1f}" for k, v in top
+                                                 if abs(v) > 1e-9))
+        print(f"{bar}", flush=True)
 
     def _combat(self):
         """Scripted attack/super for this step. See rl/combat.py.

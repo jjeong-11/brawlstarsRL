@@ -291,9 +291,9 @@ def test_terrain_on_real_frame():
     from perception.getTerrain import find_terrain, to_grid, to_pixels
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    img = cv2.imread(str(root / "showdown.png"))
+    img = cv2.imread(str(root / "media" / "fixtures" / "showdown.png"))
     if img is None:
-        print("  SKIP (showdown.png not found)")
+        print("  SKIP (media/fixtures/showdown.png not found)")
         return True
 
     t = find_terrain(img, player_pos=(1000, 300))
@@ -766,9 +766,9 @@ def test_terrain_profiles_select_correctly():
                                        PROFILES, NIGHT_TEAL, MIN_PROFILE_COVERAGE)
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    img = cv2.imread(str(root / "showdown.png"))
+    img = cv2.imread(str(root / "media" / "fixtures" / "showdown.png"))
     if img is None:
-        print("  SKIP (showdown.png not found)")
+        print("  SKIP (media/fixtures/showdown.png not found)")
         return True
 
     x, y, w, h = play_rect(img)
@@ -992,9 +992,9 @@ def test_perception_survives_no_anchor():
     from perception.liveLoop import LivePerception
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    img = cv2.imread(str(root / "showdown.png"))
+    img = cv2.imread(str(root / "media" / "fixtures" / "showdown.png"))
     if img is None:
-        print("  SKIP (showdown.png not found)")
+        print("  SKIP (media/fixtures/showdown.png not found)")
         return True
 
     # 1. Every anchor-consuming detector must accept None.
@@ -1072,7 +1072,7 @@ def test_cube_counter_not_gated_on_verified_anchor():
 
     # And it must still tolerate a missing anchor.
     root = pathlib.Path(__file__).resolve().parent.parent
-    img = cv2.imread(str(root / "showdown.png"))
+    img = cv2.imread(str(root / "media" / "fixtures" / "showdown.png"))
     if img is not None:
         from perception.getCube import find_cube_info
         assert find_cube_info(img, None)["cube_count"] is None
@@ -1119,9 +1119,9 @@ def test_destinations_avoid_the_border():
     from perception.getTerrain import find_terrain, ProfileSelector
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    img = cv2.imread(str(root / "showdown.png"))
+    img = cv2.imread(str(root / "media" / "fixtures" / "showdown.png"))
     if img is None:
-        print("  SKIP (showdown.png not found)")
+        print("  SKIP (media/fixtures/showdown.png not found)")
         return True
     terrain = find_terrain(img, selector=ProfileSelector())
     assert terrain is not None

@@ -138,7 +138,7 @@ The button positions live in a `Controls` object (device landscape pixels).
    ```
 2. Open `hud.png` and read the pixel center of the **movement joystick**, the
    **attack button**, and the **super button** (the skull button `getSuper.py`
-   reads).
+   reads). An example in-match screenshot is at `media/fixtures/hud.png`.
 3. Build the executor with those coordinates and dry-run each control:
    ```python
    from rl.actions import AdbExecutor, Controls

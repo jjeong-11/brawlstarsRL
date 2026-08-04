@@ -1,7 +1,69 @@
+from dataclasses import dataclass
+
 import cv2
 import numpy as np
 
 from .getHealth import _ocr_crop
+
+# THE CAMERA PRIOR, in one place, because both detection paths depend on it.
+#
+# The camera keeps the local player near the middle of the screen. That is the
+# whole justification for the digit-first path's gate below -- but until now the
+# RING FALLBACK did not honour it and searched the entire frame, so the two
+# paths disagreed about where the player could physically be.
+#
+# Measured on a 45-minute live session (467 traces, 354 anchors): 16.9% of
+# accepted anchors sat outside the x-range the digit path considers possible at
+# all. Those can only have come from the ungated ring fallback, and they are the
+# reason the world map fuses into noise and the map localiser never matches.
+#
+# The ring sits BELOW the digit line it is paired with, so its vertical window
+# is the digit window extended downward; horizontally the two are identical.
+CENTRE_X = (0.25, 0.75)
+CENTRE_Y_DIGITS = (0.15, 0.80)
+CENTRE_Y_RING = (0.15, 0.90)
+
+
+def _in_centre_prior(cx, cy, width, height, y_range=CENTRE_Y_DIGITS) -> bool:
+    """Could the local player's readout/ring be at this point at all?"""
+    fx, fy = cx / width, cy / height
+    return (CENTRE_X[0] <= fx <= CENTRE_X[1]) and (y_range[0] <= fy <= y_range[1])
+
+
+def _longest_bar_run(mask, min_coverage: float = 0.55) -> int:
+    """Longest run of consecutive rows that are at least `min_coverage` filled.
+
+    Kept as a diagnostic. It measures "is there a solid horizontal bar here",
+    which is the right question for telling an HP BAR from a same-coloured
+    CHARACTER -- but see the reverted-experiment note in the red veto before
+    building a decision on it, because grass answers it too.
+    """
+    if mask is None or mask.size == 0:
+        return 0
+    coverage = mask.astype(bool).mean(axis=1)
+    best = run = 0
+    for c in coverage:
+        run = run + 1 if c >= min_coverage else 0
+        if run > best:
+            best = run
+    return best
+
+
+@dataclass(frozen=True)
+class AnchorResult:
+    """One anchor detection, with the provenance needed to debug it.
+
+    `source` is the part that was missing. A wrong anchor and a missing anchor
+    are completely different bugs -- one poisons every downstream reading, the
+    other merely stalls the planner -- and from the logs alone they were
+    indistinguishable, because both arrive as a well-formed (x, y, radius).
+    """
+
+    x: int
+    y: int
+    radius: int
+    verified: bool
+    source: str        # "digits" | "ring" | "ring_unverified" | "none"
 
 
 def find_player_position(image: np.ndarray, hsv: np.ndarray = None, prior=None):
@@ -17,6 +79,17 @@ def find_player_position(image: np.ndarray, hsv: np.ndarray = None, prior=None):
 
 def find_player_position_ex(image: np.ndarray, hsv: np.ndarray = None, prior=None):
     """Finds the local player's position. Returns (x, y, radius, verified).
+
+    Thin wrapper over :func:`find_player_position_full`; use that one when you
+    want to know WHICH strategy produced the anchor.
+    """
+    r = find_player_position_full(image, hsv, prior=prior)
+    return r.x, r.y, r.radius, r.verified
+
+
+def find_player_position_full(image: np.ndarray, hsv: np.ndarray = None,
+                              prior=None) -> AnchorResult:
+    """Finds the local player's position. Returns an :class:`AnchorResult`.
 
     `verified` means the anchor was confirmed by a readable HP number, i.e. it
     came from the digit-first strategy below, or from a ring that had a
@@ -118,9 +191,7 @@ def find_player_position_ex(image: np.ndarray, hsv: np.ndarray = None, prior=Non
         # over green bushes at the screen edge (seen in real footage)
         # out-scored the real readout on green support and hijacked the
         # anchor.
-        cx_f = (x + w / 2) / width
-        cy_f = (y + h / 2) / height
-        if not (0.25 <= cx_f <= 0.75 and 0.15 <= cy_f <= 0.80):
+        if not _in_centre_prior(x + w / 2, y + h / 2, width, height):
             continue
 
         # STEP 2: Must OCR as a number (>= 2 digits). Letters, icons and
@@ -164,6 +235,17 @@ def find_player_position_ex(image: np.ndarray, hsv: np.ndarray = None, prior=Non
         # the time. 0.15 recovers ~55% more primary-path frames while still
         # rejecting enemy readouts, whose bars are solidly red rather than
         # incidentally red-tinged.
+        #
+        # A SHAPE-BASED REPLACEMENT WAS TRIED AND REVERTED. The idea was to veto
+        # on a RUN of near-fully-red rows (an HP bar is a solid rectangle; a red
+        # brawler's coverage wobbles), with green in the same band as a
+        # counter-signal. It fails for a concrete reason: GRASS. An enemy
+        # standing on grass supplies a long run of near-fully-GREEN rows, which
+        # cancels the veto, and on media/testphotos/brawl-interface5.png and
+        # -7.png the detector then locked confidently onto Bot 8 / Bot 1 --
+        # source="digits", verified=True, i.e. wrong in the one way downstream
+        # cannot detect. Any future attempt needs a green test that grass cannot
+        # satisfy; band coverage is not it.
         if cv2.countNonZero(veto_red) / veto_red.size >= 0.15:
             continue
 
@@ -210,7 +292,7 @@ def find_player_position_ex(image: np.ndarray, hsv: np.ndarray = None, prior=Non
         player_y = min(height - 1, int(dy + dh + 1.15 * dw))
         player_radius = max(30, int(0.85 * dw))
 
-        return player_x, player_y, player_radius, True
+        return AnchorResult(player_x, player_y, player_radius, True, "digits")
 
     # FALLBACK: no readable HP-over-green anywhere (e.g. the readout is
     # momentarily obscured by an effect). The ring finder searches the whole
@@ -284,7 +366,7 @@ def _find_player_by_ring(image: np.ndarray, hsv, mask):
         })
 
     if not candidates:
-        return width // 2, height // 2, 0, False
+        return AnchorResult(width // 2, height // 2, 0, False, "none")
 
     # Ring-shaped: fairly consistent on-screen height, width varies with
     # how the character's legs split it into arc fragments.
@@ -297,12 +379,25 @@ def _find_player_by_ring(image: np.ndarray, hsv, mask):
         aspect = h / max(1, w)
         return 0.5 <= aspect <= 3.5
 
+    # THE CENTRE PRIOR APPLIES HERE TOO. This is the fix for the 16.9% of live
+    # anchors that landed outside the x-window the digit path treats as
+    # physically impossible: this function used to search the whole frame, so
+    # any green blob with a number floating above it -- an ENEMY's ring, most
+    # often -- could win and be returned VERIFIED. Downstream cannot tell that
+    # apart from a real detection, so the world map fused around an enemy and
+    # the map localiser was handed noise to match against 71 templates.
     ring_candidates = [
         c for c in candidates
         if is_plausible_ring_fragment(c)
         and not _in_hud_chrome_zone(c["cx"], c["cy"], width, height)
+        and _in_centre_prior(c["cx"], c["cy"], width, height, CENTRE_Y_RING)
     ]
-    search_pool = ring_candidates if ring_candidates else candidates
+    # NOTE: no `else candidates`. That fallback used the raw green-blob list --
+    # unfiltered by shape, by HUD chrome or by position -- so on a frame with no
+    # plausible ring the bottom-most BUSH became the anchor. Returning nothing
+    # is strictly better: liveLoop coasts on the last good anchor, whereas a
+    # confident wrong answer propagates into every HUD search window.
+    search_pool = ring_candidates
 
     # Sort all ring-shaped elements from bottom to top
     search_pool = sorted(search_pool, key=lambda c: c["cy"], reverse=True)
@@ -335,6 +430,10 @@ def _find_player_by_ring(image: np.ndarray, hsv, mask):
         value, _ = find_digit_line(roi)
         return value is not None
 
+    if not search_pool:
+        # Nothing ring-shaped in the place the player can actually be.
+        return AnchorResult(width // 2, height // 2, 0, False, "none")
+
     best_ring_pieces = []
     for i, candidate in enumerate(search_pool):
         cx, cy = candidate["cx"], candidate["cy"]
@@ -359,4 +458,5 @@ def _find_player_by_ring(image: np.ndarray, hsv, mask):
     all_points = np.vstack([p["contour"] for p in best_ring_pieces])
     (circle_x, circle_y), radius = cv2.minEnclosingCircle(all_points)
 
-    return int(circle_x), int(circle_y), int(radius), verified
+    return AnchorResult(int(circle_x), int(circle_y), int(radius), verified,
+                        "ring" if verified else "ring_unverified")

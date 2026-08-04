@@ -32,8 +32,8 @@ tb_logs/
 *.tmp
 
 # --- KEPT ON PURPOSE, do not add these --------------------------------------
-# showdown.png                                calibration reference, and
-#                                             scripts/test_waypoint.py asserts on it
+# media/fixtures/                             committed calibration screenshots;
+#                                             tests/conftest.py asserts on showdown.png
 # media/gasphotos/                            5 labelled gas fixtures, ditto
 # perception/*.npz                            digit templates, REQUIRED at runtime
 # perception/username_classifier_weights.json trained weights, also required

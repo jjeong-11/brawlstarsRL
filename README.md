@@ -3,31 +3,9 @@
 A reinforcement-learning bot that plays Brawl Stars **Solo Showdown** by reading
 the screen and choosing what to do.
 
-## This bot is NOT intended to be a CHEAT or HACK
-
-Unlike Brawl Stars Cheats, Brawl Stars RL Bot does NOT 
-modify the game, read its memory, intercept network traffic, or reveal hidden
-information. It observes only the pixels displayed on the screen, just as a human
-player does, and sends standard movement and attack inputs through the 
-operating system. The reinforcement learning policy decides actions from visual 
-observations RATHER THAN following hardcoded if-then scripts like popular 
-hacks/cheats used in ranked. The bot has no access to information 
-unavailible to human players. It cannot see enemies in bushes, predict 
-future events, or obtain exact game-state values from memory. All 
-information is extracted from in-game pixels using computer vision, making 
-its observations imperfect and sometimes inaccurate. 
-
-In fact, the system operates at a disadvantage compared to human players. 
-The reinforcement learning pipeline currently processes observations at 
-approximately 10 frames per second introducing aprroximately hundred milliseconds of 
-latency between observing the game and responding. On the other hand, humans percieve and react to visual updates occurring at 60-120 frames per second, giving them substantially faster reaction times. 
-
-Although this project automates gameplay, I do NOT promote or encourage botting 
-on team-gamemodes or using bots to push the Ranked Gamemode. The purpose
-of this project is to explore reinforcement learning, computer vision, and 
-autonomous decision making in a real-time game environment. It is intended as a research and educational project rather than a competitive tool. 
-
-Please refer to DISCLAIMER.md for further information. 
+> **Disclaimer:** Unofficial research project — screen-only automation, no memory
+> or network access. Not for ranked or team modes. Live use is at your own risk.
+> See [DISCLAIMER.md](DISCLAIMER.md).
 
 ## Folder layout
 
@@ -76,8 +54,8 @@ projectv2/
 │   └── test_localize.py     identification, and refusing to guess
 ├── tools/               Offline utilities (harvest templates, classifier,
 │                        calibrate_map.py, behaviour_clone.py)
-├── media/               showdownmaps/ (72 arena layouts) testphotos/ crops/
-│                        gasphotos/ (labelled gas fixtures)
+├── media/               fixtures/ (calibration screenshots) showdownmaps/
+│                        testphotos/ crops/ gasphotos/
 ├── training_data/       username-classifier dataset
 ├── debugOutput/         annotated frames written at runtime (trace/ = decision traces)
 ├── requirements.txt     README.md      LICENSE
@@ -482,7 +460,7 @@ python -m pytest
 python -m pytest tests/test_planner.py -k gas      # or a slice of it
 
 # render one decision trace from a screenshot (no phone needed):
-python -m rl.debug_trace showdown.png     # -> debugOutput/trace/trace_0000.jpg
+python -m rl.debug_trace media/fixtures/showdown.png     # -> debugOutput/trace/trace_0000.jpg
 
 # train PPO offline on a recording (plumbing / reward check):
 python scripts/train_rl.py

@@ -160,9 +160,9 @@ if __name__ == "__main__":
     import pathlib
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    img = cv2.imread(str(root / "showdown.png"))
+    img = cv2.imread(str(root / "media" / "fixtures" / "showdown.png"))
     if img is None:
-        raise SystemExit("showdown.png not found")
+        raise SystemExit("media/fixtures/showdown.png not found")
 
     from perception.getTerrain import play_rect
 

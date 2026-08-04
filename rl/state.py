@@ -52,6 +52,13 @@ class GameState:
     # clip is empty. Anything gating on empty must check this first.
     ammo_known: bool = False
     player_pos: Optional[Point] = None
+    # How player_pos was obtained this tick: "digits" (the reliable digit-first
+    # path), "ring" / "ring_unverified" (the weak fallback), "none". Diagnostic
+    # only -- nothing learns from it -- but without it a WRONG anchor and a
+    # MISSING anchor are indistinguishable in the logs, and they are different
+    # bugs. See perception/getAnchor.AnchorResult.
+    anchor_source: str = "none"
+    anchor_fresh: bool = False
     enemy_positions: List[Point] = field(default_factory=list)
     n_boxes: int = 0
     n_ground_cubes: int = 0
@@ -131,6 +138,8 @@ def adapt_live_state(live: dict, tick: int = 0,
         ammo_count=int(live.get("ammo") or 0),
         ammo_known=bool(live.get("ammo_known")),
         player_pos=player_pos,
+        anchor_source=str(live.get("anchor_source") or "none"),
+        anchor_fresh=bool(live.get("anchor_fresh")),
         enemy_positions=enemy_positions,
         n_boxes=len(live.get("boxes") or []),
         n_ground_cubes=len(live.get("cubes") or []),
@@ -153,7 +162,7 @@ def adapt_live_state(live: dict, tick: int = 0,
 # The explicit gap list, surfaced in the README and asserted in tests.
 # Implemented since: super_charge (perception/getSuper.py), kills_this_tick
 # (rl/kills.KillAttributor, heuristic), mid_match_death (getGameState
-# "defeated" screen, calibrated from defeated.png), and gas direction
+# "defeated" screen, calibrated from media/fixtures/defeated.png), and gas direction
 # (getGas.gas_info). What remains:
 MISSING_EXTRACTORS = {
     "kill_banner": "Exact kill attribution from the on-screen defeat banner (optional; "

@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shutil
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -93,6 +94,21 @@ class TraceConfig:
     draw_minimap: bool = True
     jpeg_quality: int = 82
 
+    # --- storage guards ------------------------------------------------- #
+    # max_frames caps the frame COUNT, which is not the same as capping bytes:
+    # a frame is 150-400KB depending on scene complexity, the JSONL appends
+    # forever, and a directory left over from a run with different settings is
+    # not cleaned by the ring buffer at all (it reuses indices 0..max_frames-1
+    # and simply never touches trace_0600.jpg from the run before).
+    #
+    # An overnight run is exactly when nobody is watching the disk fill.
+    max_bytes: int = 512 * 1024 * 1024      # budget for the whole trace dir
+    max_jsonl_bytes: int = 64 * 1024 * 1024  # rotated to .1 past this
+    # Below this much free space, stop writing images entirely rather than take
+    # the machine down with it. Training continues; only the debug output stops.
+    min_free_bytes: int = 2 * 1024 * 1024 * 1024
+    prune_every: int = 25                   # captures between budget checks
+
 
 class DecisionTracer:
     """Writes an annotated frame + a JSON record every `every_seconds`."""
@@ -105,6 +121,11 @@ class DecisionTracer:
         self._last_at = 0.0
         self._n = 0
         self._jsonl = None
+        self._paused_for_disk = False
+        self._since_prune = 0
+        # Sweep once at startup: this is where a previous run's leftovers get
+        # collected, and the only place they ever would.
+        self._prune()
         if self.config.write_jsonl:
             self._jsonl = open(self.dir / "trace.jsonl", "a", buffering=1)
 
@@ -112,6 +133,82 @@ class DecisionTracer:
         if self._jsonl is not None:
             self._jsonl.close()
             self._jsonl = None
+
+    # --- storage ---------------------------------------------------------- #
+    def _frames(self):
+        """Trace images, oldest first."""
+        try:
+            files = [p for p in self.dir.glob("trace_*.jpg") if p.is_file()]
+        except OSError:
+            return []
+        return sorted(files, key=lambda p: p.stat().st_mtime)
+
+    def _free_bytes(self) -> Optional[int]:
+        try:
+            return shutil.disk_usage(self.dir).free
+        except OSError:
+            return None
+
+    def _prune(self) -> None:
+        """Keep the trace directory inside its byte budget, oldest first.
+
+        Deliberately deletes by MTIME rather than by index. The ring buffer
+        reuses names trace_0000..trace_0599, so on disk the newest frame can
+        have the lowest number -- sorting by filename would delete the frames
+        you just captured and keep the stale ones, which is precisely backwards
+        for a debugging aid you consult right after seeing something go wrong.
+        """
+        cfg = self.config
+        files = self._frames()
+        total = 0
+        for p in files:
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+
+        free = self._free_bytes()
+        tight = free is not None and free < cfg.min_free_bytes
+        # When the disk is tight, claw back to half the budget rather than
+        # sitting at the limit and re-pruning on every single capture.
+        budget = (cfg.max_bytes // 2) if tight else cfg.max_bytes
+
+        for p in files:
+            if total <= budget:
+                break
+            try:
+                size = p.stat().st_size
+                p.unlink()
+                total -= size
+            except OSError:
+                pass
+
+        # The JSONL is append-only and outlives any single run, so it needs its
+        # own cap. One generation is kept: enough to span a rotation boundary,
+        # bounded unlike the alternative.
+        path = self.dir / "trace.jsonl"
+        try:
+            if path.exists() and path.stat().st_size > cfg.max_jsonl_bytes:
+                if self._jsonl is not None:
+                    self._jsonl.close()
+                    self._jsonl = None
+                path.replace(self.dir / "trace.jsonl.1")
+                if cfg.write_jsonl:
+                    self._jsonl = open(path, "a", buffering=1)
+        except OSError:
+            pass
+
+        # Final guard: if the disk is STILL below the floor after pruning, the
+        # problem is not us. Stop writing images and say so once -- a stalled
+        # training run at 3am is a worse outcome than a gap in the traces.
+        free = self._free_bytes()
+        low = free is not None and free < cfg.min_free_bytes
+        if low and not self._paused_for_disk:
+            print(f"[trace] only {free / 1e9:.1f}GB free — pausing trace images "
+                  f"(records still written to trace.jsonl)")
+        elif self._paused_for_disk and not low:
+            print("[trace] disk space recovered — resuming trace images")
+        self._paused_for_disk = low
 
     def due(self) -> bool:
         return (time.time() - self._last_at) >= self.config.every_seconds
@@ -133,13 +230,24 @@ class DecisionTracer:
 
         name = f"trace_{self._n % self.config.max_frames:04d}.jpg"
         path = self.dir / name
-        if out is not None:
+        if out is not None and not self._paused_for_disk:
             cv2.imwrite(str(path), out,
                         [cv2.IMWRITE_JPEG_QUALITY, self.config.jpeg_quality])
-        record["frame"] = name
+            record["frame"] = name
+        else:
+            # The record is still worth having without the picture -- it is what
+            # the post-hoc analysis actually greps.
+            record["frame"] = None
+            if self._paused_for_disk:
+                record["frame_skipped"] = "low disk"
         if self._jsonl is not None:
             self._jsonl.write(json.dumps(record, default=str) + "\n")
         self._n += 1
+
+        self._since_prune += 1
+        if self._since_prune >= self.config.prune_every:
+            self._since_prune = 0
+            self._prune()
         return path
 
     # ------------------------------------------------------------------ #
@@ -345,6 +453,12 @@ def _draw_panel(out, status, state, intent, reward, tick) -> None:
                      f"super {(state.super_charge or 0) * 100:.0f}%  "
                      f"cubes {state.cube_count}  left {state.players_left}"
                      f"{'  IN GAS' if state.in_gas else ''}")
+        src = getattr(state, "anchor_source", None)
+        if src:
+            # On the frame itself, because "is the blue circle actually on the
+            # player" is the first question to ask of any trace that looks wrong.
+            lines.append(f"anchor  {src}"
+                         + ("" if getattr(state, "anchor_fresh", False) else "  COASTED"))
     if reward is not None:
         total = getattr(reward, "total", None)
         bd = getattr(reward, "breakdown", {}) or {}
@@ -405,6 +519,11 @@ def _record(planner, state, intent, reward, tick) -> dict:
             "in_gas": state.in_gas, "enemies": len(state.enemy_positions),
             "players_left": state.players_left, "alive": state.is_alive,
             "player_pos": list(state.player_pos) if state.player_pos else None,
+            # Provenance, not position: "digits" is the trustworthy path, any
+            # "ring*" reading is the weak fallback and a prime suspect whenever
+            # the route in this frame looks wrong.
+            "anchor_source": getattr(state, "anchor_source", None),
+            "anchor_fresh": getattr(state, "anchor_fresh", None),
         }
     if reward is not None:
         rec["reward"] = round(float(getattr(reward, "total", 0.0)), 4)
@@ -423,7 +542,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(root))
 
     ap = argparse.ArgumentParser(description="Render one trace frame from a screenshot.")
-    ap.add_argument("image", nargs="?", default=str(root / "showdown.png"))
+    ap.add_argument("image", nargs="?", default=str(root / "media" / "fixtures" / "showdown.png"))
     ap.add_argument("--heading", type=int, default=2)
     ap.add_argument("--dist", type=int, default=2)
     args = ap.parse_args()
