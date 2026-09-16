@@ -19,3 +19,8 @@ sb3-contrib          # RecurrentPPO (MlpLstmPolicy). Without it rl/train.py
                      # observation is a single-frame snapshot so the policy
                      # then has no memory at all.
 pytest               # `python -m pytest` runs everything under tests/.
+
+# --- Web UI (webui/, scripts/run_webui.py) ---------------------------------
+flask>=3.0           # the brawler picker + live trace viewer. Nothing else in
+                     # the project imports it; the rest of the stack runs
+                     # headless without it.

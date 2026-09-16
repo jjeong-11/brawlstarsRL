@@ -1,0 +1,759 @@
+{
+  "_comment": "Brawl Stars roster. Every entry maps to models/<id>/ for its own policy weights. Regenerate with `python tools/sync_brawlers.py` (pulls the live roster from api.brawlapi.com); edit by hand only for the multi_body flag. Chromatic rarity was retired in the January 2024 progression overhaul -- those brawlers now sit in Epic / Mythic / Legendary.",
+  "_source": "brawlify.com/brawlers (Supercell API mirror)",
+  "_fetched": "2026-08-04",
+  "icon_url_template": "https://cdn.brawlify.com/brawlers/borderless/{scid}.png",
+  "rarity_order": [
+    "Starting Brawler",
+    "Rare",
+    "Super Rare",
+    "Epic",
+    "Mythic",
+    "Legendary",
+    "Ultra Legendary"
+  ],
+  "brawlers": [
+    {
+      "id": "shelly",
+      "name": "SHELLY",
+      "rarity": "Starting Brawler",
+      "scid": 16000000,
+      "multi_body": false
+    },
+    {
+      "id": "colt",
+      "name": "COLT",
+      "rarity": "Rare",
+      "scid": 16000001,
+      "multi_body": false
+    },
+    {
+      "id": "bull",
+      "name": "BULL",
+      "rarity": "Rare",
+      "scid": 16000002,
+      "multi_body": false
+    },
+    {
+      "id": "brock",
+      "name": "BROCK",
+      "rarity": "Rare",
+      "scid": 16000003,
+      "multi_body": false
+    },
+    {
+      "id": "rico",
+      "name": "RICO",
+      "rarity": "Super Rare",
+      "scid": 16000004,
+      "multi_body": false
+    },
+    {
+      "id": "spike",
+      "name": "SPIKE",
+      "rarity": "Legendary",
+      "scid": 16000005,
+      "multi_body": false
+    },
+    {
+      "id": "barley",
+      "name": "BARLEY",
+      "rarity": "Rare",
+      "scid": 16000006,
+      "multi_body": false
+    },
+    {
+      "id": "jessie",
+      "name": "JESSIE",
+      "rarity": "Super Rare",
+      "scid": 16000007,
+      "multi_body": true
+    },
+    {
+      "id": "nita",
+      "name": "NITA",
+      "rarity": "Rare",
+      "scid": 16000008,
+      "multi_body": true
+    },
+    {
+      "id": "dynamike",
+      "name": "DYNAMIKE",
+      "rarity": "Super Rare",
+      "scid": 16000009,
+      "multi_body": false
+    },
+    {
+      "id": "el_primo",
+      "name": "EL PRIMO",
+      "rarity": "Rare",
+      "scid": 16000010,
+      "multi_body": false
+    },
+    {
+      "id": "mortis",
+      "name": "MORTIS",
+      "rarity": "Mythic",
+      "scid": 16000011,
+      "multi_body": false
+    },
+    {
+      "id": "crow",
+      "name": "CROW",
+      "rarity": "Legendary",
+      "scid": 16000012,
+      "multi_body": false
+    },
+    {
+      "id": "poco",
+      "name": "POCO",
+      "rarity": "Rare",
+      "scid": 16000013,
+      "multi_body": false
+    },
+    {
+      "id": "bo",
+      "name": "BO",
+      "rarity": "Epic",
+      "scid": 16000014,
+      "multi_body": false
+    },
+    {
+      "id": "piper",
+      "name": "PIPER",
+      "rarity": "Epic",
+      "scid": 16000015,
+      "multi_body": false
+    },
+    {
+      "id": "pam",
+      "name": "PAM",
+      "rarity": "Epic",
+      "scid": 16000016,
+      "multi_body": true
+    },
+    {
+      "id": "tara",
+      "name": "TARA",
+      "rarity": "Mythic",
+      "scid": 16000017,
+      "multi_body": true
+    },
+    {
+      "id": "darryl",
+      "name": "DARRYL",
+      "rarity": "Super Rare",
+      "scid": 16000018,
+      "multi_body": false
+    },
+    {
+      "id": "penny",
+      "name": "PENNY",
+      "rarity": "Super Rare",
+      "scid": 16000019,
+      "multi_body": true
+    },
+    {
+      "id": "frank",
+      "name": "FRANK",
+      "rarity": "Epic",
+      "scid": 16000020,
+      "multi_body": false
+    },
+    {
+      "id": "gene",
+      "name": "GENE",
+      "rarity": "Mythic",
+      "scid": 16000021,
+      "multi_body": false
+    },
+    {
+      "id": "tick",
+      "name": "TICK",
+      "rarity": "Super Rare",
+      "scid": 16000022,
+      "multi_body": true
+    },
+    {
+      "id": "leon",
+      "name": "LEON",
+      "rarity": "Legendary",
+      "scid": 16000023,
+      "multi_body": true
+    },
+    {
+      "id": "rosa",
+      "name": "ROSA",
+      "rarity": "Rare",
+      "scid": 16000024,
+      "multi_body": false
+    },
+    {
+      "id": "carl",
+      "name": "CARL",
+      "rarity": "Super Rare",
+      "scid": 16000025,
+      "multi_body": false
+    },
+    {
+      "id": "bibi",
+      "name": "BIBI",
+      "rarity": "Epic",
+      "scid": 16000026,
+      "multi_body": false
+    },
+    {
+      "id": "8_bit",
+      "name": "8-BIT",
+      "rarity": "Super Rare",
+      "scid": 16000027,
+      "multi_body": true
+    },
+    {
+      "id": "sandy",
+      "name": "SANDY",
+      "rarity": "Legendary",
+      "scid": 16000028,
+      "multi_body": false
+    },
+    {
+      "id": "bea",
+      "name": "BEA",
+      "rarity": "Epic",
+      "scid": 16000029,
+      "multi_body": false
+    },
+    {
+      "id": "emz",
+      "name": "EMZ",
+      "rarity": "Epic",
+      "scid": 16000030,
+      "multi_body": false
+    },
+    {
+      "id": "mr_p",
+      "name": "MR. P",
+      "rarity": "Mythic",
+      "scid": 16000031,
+      "multi_body": true
+    },
+    {
+      "id": "max",
+      "name": "MAX",
+      "rarity": "Mythic",
+      "scid": 16000032,
+      "multi_body": false
+    },
+    {
+      "id": "jacky",
+      "name": "JACKY",
+      "rarity": "Super Rare",
+      "scid": 16000034,
+      "multi_body": false
+    },
+    {
+      "id": "gale",
+      "name": "GALE",
+      "rarity": "Epic",
+      "scid": 16000035,
+      "multi_body": false
+    },
+    {
+      "id": "nani",
+      "name": "NANI",
+      "rarity": "Epic",
+      "scid": 16000036,
+      "multi_body": true
+    },
+    {
+      "id": "sprout",
+      "name": "SPROUT",
+      "rarity": "Mythic",
+      "scid": 16000037,
+      "multi_body": false
+    },
+    {
+      "id": "surge",
+      "name": "SURGE",
+      "rarity": "Legendary",
+      "scid": 16000038,
+      "multi_body": false
+    },
+    {
+      "id": "colette",
+      "name": "COLETTE",
+      "rarity": "Epic",
+      "scid": 16000039,
+      "multi_body": false
+    },
+    {
+      "id": "amber",
+      "name": "AMBER",
+      "rarity": "Legendary",
+      "scid": 16000040,
+      "multi_body": false
+    },
+    {
+      "id": "lou",
+      "name": "LOU",
+      "rarity": "Mythic",
+      "scid": 16000041,
+      "multi_body": false
+    },
+    {
+      "id": "byron",
+      "name": "BYRON",
+      "rarity": "Mythic",
+      "scid": 16000042,
+      "multi_body": false
+    },
+    {
+      "id": "edgar",
+      "name": "EDGAR",
+      "rarity": "Epic",
+      "scid": 16000043,
+      "multi_body": false
+    },
+    {
+      "id": "ruffs",
+      "name": "RUFFS",
+      "rarity": "Mythic",
+      "scid": 16000044,
+      "multi_body": false
+    },
+    {
+      "id": "stu",
+      "name": "STU",
+      "rarity": "Epic",
+      "scid": 16000045,
+      "multi_body": false
+    },
+    {
+      "id": "belle",
+      "name": "BELLE",
+      "rarity": "Epic",
+      "scid": 16000046,
+      "multi_body": false
+    },
+    {
+      "id": "squeak",
+      "name": "SQUEAK",
+      "rarity": "Mythic",
+      "scid": 16000047,
+      "multi_body": false
+    },
+    {
+      "id": "grom",
+      "name": "GROM",
+      "rarity": "Epic",
+      "scid": 16000048,
+      "multi_body": false
+    },
+    {
+      "id": "buzz",
+      "name": "BUZZ",
+      "rarity": "Mythic",
+      "scid": 16000049,
+      "multi_body": false
+    },
+    {
+      "id": "griff",
+      "name": "GRIFF",
+      "rarity": "Epic",
+      "scid": 16000050,
+      "multi_body": false
+    },
+    {
+      "id": "ash",
+      "name": "ASH",
+      "rarity": "Epic",
+      "scid": 16000051,
+      "multi_body": true
+    },
+    {
+      "id": "meg",
+      "name": "MEG",
+      "rarity": "Legendary",
+      "scid": 16000052,
+      "multi_body": false
+    },
+    {
+      "id": "lola",
+      "name": "LOLA",
+      "rarity": "Epic",
+      "scid": 16000053,
+      "multi_body": true
+    },
+    {
+      "id": "fang",
+      "name": "FANG",
+      "rarity": "Mythic",
+      "scid": 16000054,
+      "multi_body": false
+    },
+    {
+      "id": "eve",
+      "name": "EVE",
+      "rarity": "Mythic",
+      "scid": 16000056,
+      "multi_body": true
+    },
+    {
+      "id": "janet",
+      "name": "JANET",
+      "rarity": "Mythic",
+      "scid": 16000057,
+      "multi_body": false
+    },
+    {
+      "id": "bonnie",
+      "name": "BONNIE",
+      "rarity": "Epic",
+      "scid": 16000058,
+      "multi_body": false
+    },
+    {
+      "id": "otis",
+      "name": "OTIS",
+      "rarity": "Mythic",
+      "scid": 16000059,
+      "multi_body": false
+    },
+    {
+      "id": "sam",
+      "name": "SAM",
+      "rarity": "Epic",
+      "scid": 16000060,
+      "multi_body": false
+    },
+    {
+      "id": "gus",
+      "name": "GUS",
+      "rarity": "Super Rare",
+      "scid": 16000061,
+      "multi_body": true
+    },
+    {
+      "id": "buster",
+      "name": "BUSTER",
+      "rarity": "Mythic",
+      "scid": 16000062,
+      "multi_body": false
+    },
+    {
+      "id": "chester",
+      "name": "CHESTER",
+      "rarity": "Legendary",
+      "scid": 16000063,
+      "multi_body": false
+    },
+    {
+      "id": "gray",
+      "name": "GRAY",
+      "rarity": "Mythic",
+      "scid": 16000064,
+      "multi_body": false
+    },
+    {
+      "id": "mandy",
+      "name": "MANDY",
+      "rarity": "Epic",
+      "scid": 16000065,
+      "multi_body": false
+    },
+    {
+      "id": "r_t",
+      "name": "R-T",
+      "rarity": "Mythic",
+      "scid": 16000066,
+      "multi_body": true
+    },
+    {
+      "id": "willow",
+      "name": "WILLOW",
+      "rarity": "Mythic",
+      "scid": 16000067,
+      "multi_body": true
+    },
+    {
+      "id": "maisie",
+      "name": "MAISIE",
+      "rarity": "Epic",
+      "scid": 16000068,
+      "multi_body": false
+    },
+    {
+      "id": "hank",
+      "name": "HANK",
+      "rarity": "Epic",
+      "scid": 16000069,
+      "multi_body": false
+    },
+    {
+      "id": "cordelius",
+      "name": "CORDELIUS",
+      "rarity": "Legendary",
+      "scid": 16000070,
+      "multi_body": false
+    },
+    {
+      "id": "doug",
+      "name": "DOUG",
+      "rarity": "Mythic",
+      "scid": 16000071,
+      "multi_body": false
+    },
+    {
+      "id": "pearl",
+      "name": "PEARL",
+      "rarity": "Epic",
+      "scid": 16000072,
+      "multi_body": false
+    },
+    {
+      "id": "chuck",
+      "name": "CHUCK",
+      "rarity": "Mythic",
+      "scid": 16000073,
+      "multi_body": false
+    },
+    {
+      "id": "charlie",
+      "name": "CHARLIE",
+      "rarity": "Mythic",
+      "scid": 16000074,
+      "multi_body": true
+    },
+    {
+      "id": "mico",
+      "name": "MICO",
+      "rarity": "Mythic",
+      "scid": 16000075,
+      "multi_body": false
+    },
+    {
+      "id": "kit",
+      "name": "KIT",
+      "rarity": "Legendary",
+      "scid": 16000076,
+      "multi_body": true
+    },
+    {
+      "id": "larry_and_lawrie",
+      "name": "LARRY & LAWRIE",
+      "rarity": "Epic",
+      "scid": 16000077,
+      "multi_body": true
+    },
+    {
+      "id": "melodie",
+      "name": "MELODIE",
+      "rarity": "Mythic",
+      "scid": 16000078,
+      "multi_body": false
+    },
+    {
+      "id": "angelo",
+      "name": "ANGELO",
+      "rarity": "Epic",
+      "scid": 16000079,
+      "multi_body": false
+    },
+    {
+      "id": "draco",
+      "name": "DRACO",
+      "rarity": "Legendary",
+      "scid": 16000080,
+      "multi_body": false
+    },
+    {
+      "id": "lily",
+      "name": "LILY",
+      "rarity": "Mythic",
+      "scid": 16000081,
+      "multi_body": false
+    },
+    {
+      "id": "berry",
+      "name": "BERRY",
+      "rarity": "Epic",
+      "scid": 16000082,
+      "multi_body": false
+    },
+    {
+      "id": "clancy",
+      "name": "CLANCY",
+      "rarity": "Mythic",
+      "scid": 16000083,
+      "multi_body": false
+    },
+    {
+      "id": "moe",
+      "name": "MOE",
+      "rarity": "Mythic",
+      "scid": 16000084,
+      "multi_body": false
+    },
+    {
+      "id": "kenji",
+      "name": "KENJI",
+      "rarity": "Legendary",
+      "scid": 16000085,
+      "multi_body": false
+    },
+    {
+      "id": "shade",
+      "name": "SHADE",
+      "rarity": "Epic",
+      "scid": 16000086,
+      "multi_body": false
+    },
+    {
+      "id": "juju",
+      "name": "JUJU",
+      "rarity": "Mythic",
+      "scid": 16000087,
+      "multi_body": true
+    },
+    {
+      "id": "meeple",
+      "name": "MEEPLE",
+      "rarity": "Epic",
+      "scid": 16000089,
+      "multi_body": true
+    },
+    {
+      "id": "ollie",
+      "name": "OLLIE",
+      "rarity": "Mythic",
+      "scid": 16000090,
+      "multi_body": true
+    },
+    {
+      "id": "lumi",
+      "name": "LUMI",
+      "rarity": "Mythic",
+      "scid": 16000091,
+      "multi_body": false
+    },
+    {
+      "id": "finx",
+      "name": "FINX",
+      "rarity": "Mythic",
+      "scid": 16000092,
+      "multi_body": false
+    },
+    {
+      "id": "jae_yong",
+      "name": "JAE-YONG",
+      "rarity": "Mythic",
+      "scid": 16000093,
+      "multi_body": false
+    },
+    {
+      "id": "kaze",
+      "name": "KAZE",
+      "rarity": "Ultra Legendary",
+      "scid": 16000094,
+      "multi_body": false
+    },
+    {
+      "id": "alli",
+      "name": "ALLI",
+      "rarity": "Mythic",
+      "scid": 16000095,
+      "multi_body": false
+    },
+    {
+      "id": "trunk",
+      "name": "TRUNK",
+      "rarity": "Epic",
+      "scid": 16000096,
+      "multi_body": false
+    },
+    {
+      "id": "mina",
+      "name": "MINA",
+      "rarity": "Mythic",
+      "scid": 16000097,
+      "multi_body": false
+    },
+    {
+      "id": "ziggy",
+      "name": "ZIGGY",
+      "rarity": "Mythic",
+      "scid": 16000098,
+      "multi_body": false
+    },
+    {
+      "id": "pierce",
+      "name": "PIERCE",
+      "rarity": "Legendary",
+      "scid": 16000099,
+      "multi_body": false
+    },
+    {
+      "id": "gigi",
+      "name": "GIGI",
+      "rarity": "Mythic",
+      "scid": 16000100,
+      "multi_body": false
+    },
+    {
+      "id": "glowy",
+      "name": "GLOWY",
+      "rarity": "Mythic",
+      "scid": 16000101,
+      "multi_body": false
+    },
+    {
+      "id": "sirius",
+      "name": "SIRIUS",
+      "rarity": "Ultra Legendary",
+      "scid": 16000102,
+      "multi_body": true
+    },
+    {
+      "id": "najia",
+      "name": "NAJIA",
+      "rarity": "Mythic",
+      "scid": 16000103,
+      "multi_body": false
+    },
+    {
+      "id": "damian",
+      "name": "DAMIAN",
+      "rarity": "Mythic",
+      "scid": 16000104,
+      "multi_body": false
+    },
+    {
+      "id": "starr_nova",
+      "name": "STARR NOVA",
+      "rarity": "Mythic",
+      "scid": 16000105,
+      "multi_body": true
+    },
+    {
+      "id": "bolt",
+      "name": "BOLT",
+      "rarity": "Epic",
+      "scid": 16000106,
+      "multi_body": false
+    },
+    {
+      "id": "nori",
+      "name": "NORI",
+      "rarity": "Legendary",
+      "scid": 16000107,
+      "multi_body": false
+    },
+    {
+      "id": "wendy",
+      "name": "WENDY",
+      "rarity": "Mythic",
+      "scid": 16000108,
+      "multi_body": true
+    }
+  ]
+}

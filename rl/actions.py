@@ -67,23 +67,35 @@ def make_action_space():
 
 
 class Intent:
-    """A decoded, human-readable action: a move direction + attack/super taps."""
+    """A decoded, human-readable action: a move direction + attack/super.
 
-    __slots__ = ("move_label", "move", "fire_attack", "fire_super", "raw")
+    `aim` is what turns a tap into an aimed shot. None means the plain tap the
+    game auto-aims at the nearest enemy; a unit vector means drag the attack
+    button that way instead. Which one a brawler gets is decided in
+    `rl/combat.py` from `brawlers/abilities.py` — see there for why it is
+    derived from class and range rather than listed per brawler.
+    """
 
-    def __init__(self, move_label, move, fire_attack, fire_super, raw):
+    __slots__ = ("move_label", "move", "fire_attack", "fire_super", "raw",
+                 "aim", "aim_frac", "aim_mode")
+
+    def __init__(self, move_label, move, fire_attack, fire_super, raw,
+                 aim=None, aim_frac: float = 1.0, aim_mode: str = "auto"):
         self.move_label = move_label     # e.g. "NE/far" or "NE/far(committed)"
         self.move = move                 # (dx, dy) unit vector
-        self.fire_attack = fire_attack   # bool (plain tap, auto-aim)
-        self.fire_super = fire_super     # bool (plain tap, auto-aim)
+        self.fire_attack = fire_attack   # bool
+        self.fire_super = fire_super     # bool
         self.raw = raw
+        self.aim = aim                   # (dx, dy) unit vector, or None = auto-aim
+        self.aim_frac = aim_frac         # 0..1 of full deflection (lobbed range)
+        self.aim_mode = aim_mode         # "auto" | "manual", for the trace
 
     def __repr__(self):
         parts = [self.move_label]
         if self.fire_attack:
-            parts.append("attack")
+            parts.append("attack" if self.aim is None else "AIM-attack")
         if self.fire_super:
-            parts.append("SUPER")
+            parts.append("SUPER" if self.aim is None else "AIM-SUPER")
         return f"Intent({'+'.join(parts)})"
 
 
@@ -106,6 +118,11 @@ def decode_action(action, state=None, frame_size=(1280, 720),
         raise ValueError("expected polar action [heading, distance]")
     heading, dist = int(action[0]), int(action[1])
     attack, super_ = (1 if combat[0] else 0), (1 if combat[1] else 0)
+    # A CombatDecision carries an aim vector; a bare (attack, super) tuple does
+    # not. Both are accepted so every existing caller and test keeps working.
+    aim = getattr(combat, "aim", None)
+    aim_frac = float(getattr(combat, "aim_frac", 1.0) or 1.0)
+    aim_mode = str(getattr(combat, "mode", "auto") or "auto")
     heading %= N_HEADINGS
     dist = max(0, min(N_DISTANCES - 1, dist))
 
@@ -121,7 +138,9 @@ def decode_action(action, state=None, frame_size=(1280, 720),
         label += "(committed)"      # the heads above were ignored this step
     if status.blocked:
         label += "(blocked)"
-    return Intent(label, move, attack == 1, super_ == 1, (heading, dist, attack, super_))
+    return Intent(label, move, attack == 1, super_ == 1,
+                  (heading, dist, attack, super_),
+                  aim=aim, aim_frac=aim_frac, aim_mode=aim_mode)
 
 
 class ActionExecutor:
@@ -177,6 +196,17 @@ class Controls:
     super_btn: Tuple[int, int]
     move_radius: int = 170
     hold_ms: int = 200
+    # How far to drag a fire button when AIMING (see AdbExecutor._aimed_press).
+    # Independent of move_radius: the aim stick and the movement stick are
+    # different controls with different throw, and tying them together means
+    # tuning one breaks the other.
+    aim_radius: int = 190
+    # Floor on the drag, in pixels and as a fraction. A drag shorter than the
+    # system's tap slop is delivered as a TAP, which fires an auto-aimed shot —
+    # so an under-length aim does not merely aim badly, it silently switches
+    # mode. Both floors exist to keep that from happening at close range.
+    aim_min_radius: int = 60
+    aim_min_frac: float = 0.25
 
     @staticmethod
     def from_screen(width: int, height: int) -> "Controls":
@@ -191,6 +221,8 @@ class Controls:
             attack_btn=(int(0.88 * w), int(0.82 * h)),
             super_btn=(int(0.80 * w), int(0.66 * h)),
             move_radius=int(0.10 * w),
+            aim_radius=int(0.11 * w),
+            aim_min_radius=int(0.03 * w),
             # Was 200, which silently capped the whole loop at 5 fps and
             # accumulated action latency behind it. 100 matches the default
             # 0.1s tick; tuned_for_tick() adjusts it if you change --tick-seconds.
@@ -411,11 +443,51 @@ class AdbExecutor(ActionExecutor):
         else:
             self._release_move()
 
-        # Attack / super are taps (auto-aim). See the multitouch caveat above.
+        # Attack / super: a plain tap is the AUTO-AIM path (the game picks the
+        # nearest enemy). An aim vector means drag instead — see _aimed_press.
         if intent.fire_attack:
-            self._tap(*c.attack_btn)
+            if intent.aim is None:
+                self._tap(*c.attack_btn)
+            else:
+                self._aimed_press(c.attack_btn, intent.aim, intent.aim_frac)
         if intent.fire_super:
-            self._tap(*c.super_btn)
+            if intent.aim is None:
+                self._tap(*c.super_btn)
+            else:
+                self._aimed_press(c.super_btn, intent.aim, intent.aim_frac)
+
+    def _aimed_press(self, button, aim, frac: float) -> None:
+        """Drag from a fire button to aim the shot, then release to fire.
+
+        The in-game gesture is press the button, drag out to swing the aim
+        indicator, release to fire along it. So it is DOWN at the button, MOVE
+        out to the deflected point, UP — the same three-part gesture the
+        movement stick uses, and for the same reason: pressing down at the
+        deflected point would place the touch there rather than dragging to it,
+        which the game reads as a tap on empty screen.
+
+        `frac` scales the deflection. It only matters for lobbed attacks, where
+        the drag LENGTH sets where the shot lands rather than merely which way
+        it goes — a thrower aimed at full deflection always overshoots a close
+        target. `aim_min_frac` keeps even the shortest lob past the dead zone
+        that would register as a tap.
+        """
+        c = self.controls
+        bx, by = int(button[0]), int(button[1])
+        r = max(c.aim_min_radius, int(c.aim_radius * max(c.aim_min_frac,
+                                                         min(1.0, frac))))
+        tx = int(bx + aim[0] * r)
+        ty = int(by + aim[1] * r)
+        # Clamp inside the panel: a MOVE off-screen is silently dropped by the
+        # input system, which would leave the touch down at the button and fire
+        # an un-aimed shot on release — the failure that looks like the aim
+        # code doing nothing at all.
+        w, h = self.screen_size
+        tx = max(1, min(w - 2, tx))
+        ty = max(1, min(h - 2, ty))
+        self._motionevent("DOWN", bx, by)
+        self._motionevent("MOVE", tx, ty)
+        self._motionevent("UP", tx, ty)
 
     def tap_norm(self, fx: float, fy: float) -> None:
         """Tap at a position given as fractions of the landscape screen.

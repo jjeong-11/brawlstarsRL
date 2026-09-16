@@ -800,7 +800,8 @@ def test_gas_calibration_fixtures():
     import cv2
     from perception.getGas import gas_info
     from perception.getAnchor import find_player_position
-    from perception.getTerrain import find_terrain, ProfileSelector
+    from perception.getTerrain import (find_terrain, ProfileSelector,
+                                       BUSH_WALKABLE_FRACTION)
 
     root = pathlib.Path(__file__).resolve().parent.parent
     truth = {"gas_1": True, "gas_2": False, "gas_3": True,
@@ -826,9 +827,24 @@ def test_gas_calibration_fixtures():
         t = find_terrain(img, selector=ProfileSelector())
         assert t is not None, f"{name}: no terrain profile matched"
         assert t["coverage"] > 0.45, f"{name}: weak coverage {t['coverage']:.2f}"
-        assert 0.20 < t["occupancy"].mean() < 0.60, (
+        # LOWERED from 0.20 when `find_terrain` stopped inferring a wall from
+        # the absence of floor. The old numbers on these five shots were 0.46 -
+        # 0.65 blocked, which is not what these maps look like; the band was
+        # measuring the phantom walls, not the real ones. Re-measured after the
+        # change: 0.14 - 0.39, and gas_2 -- the low one -- is a genuinely open
+        # grass arena with sparse blocks. Verified by eye against the overlay,
+        # which is the only way to check a number like this.
+        assert 0.08 < t["occupancy"].mean() < 0.60, (
             f"{name}: implausible blocked fraction {t['occupancy'].mean():.2f}")
-    print(f"  {len(shots)}/{len(shots)} fixtures: in_gas correct, profile matched")
+        # These five shots are the bush regression's natural home: every one has
+        # foliage, and three have gas sitting on top of it, which is exactly the
+        # tint that used to push a bush out of its colour class and into a wall.
+        bushy = t["bush"] >= BUSH_WALKABLE_FRACTION
+        assert not (bushy & t["occupancy"]).any(), (
+            f"{name}: {int((bushy & t['occupancy']).sum())} bush cells "
+            f"classified as wall")
+    print(f"  {len(shots)}/{len(shots)} fixtures: in_gas correct, profile matched, "
+          f"no bush read as wall")
 
 
 def test_gas_and_bush_are_separable():

@@ -1,0 +1,442 @@
+/* webui/static/style.css
+ *
+ * Built against the apple-design guidance. The decisions that matter:
+ *
+ *  - Chrome is a translucent MATERIAL with content scrolling under it, not an
+ *    opaque strip that eats a band of the viewport. The scroll edge is a mask,
+ *    not a 1px divider.
+ *  - Type tracking is size-specific. Large text gets negative tracking (letters
+ *    read too far apart as they grow); small caption text gets positive. A
+ *    single letter-spacing value is wrong somewhere.
+ *  - Feedback lives on :active, not on click, and it is instant.
+ *  - Anything a gesture can touch is animated by a spring in JS. CSS
+ *    transitions here are only for things that are never grabbed mid-flight.
+ *  - Reduced motion, reduced transparency and increased contrast are each
+ *    handled independently, because users set them independently.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --bg: #0b0d10;
+  --bg-raise: #12151a;
+  --surface: rgba(28, 33, 40, 0.72);
+  --surface-solid: #1c2128;
+  --hairline: rgba(255, 255, 255, 0.09);
+  --edge-light: rgba(255, 255, 255, 0.14);
+
+  --text: #f2f5f8;
+  --text-2: #aab3bf;
+  --text-3: #77818f;
+
+  --accent: #ffcf3d;
+  --accent-ink: #23190a;
+  --good: #43c463;
+  --bad: #ff5f56;
+  --warn: #f5b93b;
+  --info: #5aa9ff;
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
+  /* Bigger surfaces read as thicker: more blur, deeper shadow. */
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, .45), 0 2px 8px rgba(0, 0, 0, .3);
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background:
+    radial-gradient(1100px 620px at 78% -12%, rgba(90, 169, 255, .07), transparent 60%),
+    radial-gradient(900px 520px at 6% 104%, rgba(255, 207, 61, .05), transparent 60%),
+    var(--bg);
+  color: var(--text);
+  /* System font first: it already ships optical sizing and legibility tuning. */
+  font: 400 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── chrome ─────────────────────────────────────────────────────────── */
+.chrome {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .75rem clamp(.9rem, 2.5vw, 1.5rem);
+  background: rgba(11, 13, 16, .62);
+  backdrop-filter: blur(26px) saturate(180%);
+  -webkit-backdrop-filter: blur(26px) saturate(180%);
+  /* Light catching the top edge of the material. */
+  border-bottom: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 0 var(--edge-light);
+}
+
+.wordmark {
+  font-size: 1.0625rem; font-weight: 620;
+  letter-spacing: -0.014em;          /* tighten as size grows */
+}
+.wordmark span {
+  display: block;
+  font-size: .6875rem; font-weight: 450;
+  letter-spacing: .02em;             /* small text opens up */
+  color: var(--text-3);
+  margin-top: .1rem;
+}
+
+.pill {
+  display: inline-flex; align-items: center; gap: .45rem;
+  padding: .3rem .7rem .3rem .55rem;
+  border-radius: 999px;
+  font-size: .75rem; font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+.pill i {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; flex: none;
+}
+.pill[data-status="running"] { color: var(--good); border-color: rgba(67,196,99,.35); background: rgba(67,196,99,.1); }
+.pill[data-status="running"] i { animation: breathe 2.4s ease-in-out infinite; }
+.pill[data-status="starting"],
+.pill[data-status="between-matches"] { color: var(--warn); border-color: rgba(245,185,59,.35); background: rgba(245,185,59,.1); }
+.pill[data-status="error"] { color: var(--bad); border-color: rgba(255,95,86,.4); background: rgba(255,95,86,.12); }
+.pill.control { color: var(--bad); border-color: rgba(255,95,86,.45); background: rgba(255,95,86,.14); }
+
+@keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+
+/* ── layout ─────────────────────────────────────────────────────────── */
+main {
+  display: grid;
+  grid-template-columns: 336px minmax(0, 1fr) 330px;
+  gap: clamp(.75rem, 1.4vw, 1.15rem);
+  padding: clamp(.75rem, 1.4vw, 1.15rem);
+  align-items: start;
+  max-width: 1800px; margin-inline: auto;
+}
+@media (max-width: 1240px) { main { grid-template-columns: 320px minmax(0,1fr); } .readout { grid-column: 1 / -1; } }
+@media (max-width: 860px)  { main { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--surface);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 0 var(--edge-light), var(--shadow-lg);
+  border-radius: var(--r-lg);
+  padding: 1.05rem;
+}
+.panel h2 {
+  margin: 0 0 .85rem;
+  font-size: .6875rem; font-weight: 660;
+  text-transform: uppercase; letter-spacing: .09em;   /* caps need air */
+  color: var(--text-3);
+  display: flex; align-items: baseline; gap: .5rem;
+}
+.panel h3 {
+  margin: 1.3rem 0 .5rem;
+  font-size: .6875rem; font-weight: 660;
+  text-transform: uppercase; letter-spacing: .09em;
+  color: var(--text-3);
+}
+
+/* ── the selected brawler ───────────────────────────────────────────── */
+.hero {
+  display: flex; align-items: center; gap: .8rem;
+  padding: .7rem;
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid var(--hairline);
+}
+.hero img {
+  width: 64px; height: 64px; flex: none;
+  border-radius: 10px; object-fit: cover;
+  background: #0a0d10;
+  box-shadow: var(--shadow-sm);
+}
+.hero-text { min-width: 0; }
+.hero-text strong {
+  display: block;
+  font-size: 1.25rem; font-weight: 660;
+  letter-spacing: -0.018em;          /* display size -> negative tracking */
+  line-height: 1.12;                 /* and tight leading */
+}
+.meta { font-size: .75rem; color: var(--text-3); letter-spacing: .012em; }
+
+/* Range / aim, the two facts the combat script actually uses. */
+.facts {
+  display: grid; grid-template-columns: 1fr 1fr; gap: .4rem;
+  margin-top: .55rem;
+}
+.fact {
+  padding: .45rem .6rem;
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, .035);
+  border: 1px solid var(--hairline);
+  min-width: 0;
+}
+.fact b {
+  display: block;
+  font-size: .625rem; font-weight: 620;
+  text-transform: uppercase; letter-spacing: .085em;
+  color: var(--text-3);
+}
+.fact span {
+  display: block; margin-top: .12rem;
+  font-size: .9375rem; font-weight: 600; letter-spacing: -.006em;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fact[data-aim="manual"] span { color: var(--info); }
+.fact[data-conf="bucket"] span::after { content: " ~"; color: var(--text-3); }
+.fact[data-conf="unknown"] span { color: var(--text-3); }
+
+.note {
+  margin: .55rem 0 0;
+  font-size: .75rem; line-height: 1.45;
+  color: var(--text-3); letter-spacing: .012em;
+}
+.note.warn {
+  color: var(--warn);
+  border-left: 2px solid currentColor; padding-left: .55rem;
+}
+.note.foot { margin-top: .9rem; }
+.hidden { display: none; }
+
+/* ── form ───────────────────────────────────────────────────────────── */
+label {
+  display: block; margin: 1.05rem 0 .35rem;
+  font-size: .6875rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .085em;
+  color: var(--text-3);
+}
+label.check {
+  display: flex; align-items: center; gap: .55rem;
+  margin: .6rem 0 0;
+  text-transform: none; letter-spacing: .012em; font-size: .8125rem;
+  font-weight: 450; color: var(--text-2);
+}
+label.check input { accent-color: var(--accent); width: 15px; height: 15px; }
+.num { color: var(--accent); font-variant-numeric: tabular-nums; }
+
+select, input[type="text"], input[type="search"] {
+  width: 100%; padding: .55rem .7rem;
+  background: rgba(255, 255, 255, .05);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  font: inherit; font-size: .875rem;
+}
+input::placeholder { color: var(--text-3); }
+:focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+/* Segmented control. The thumb is moved by a spring in JS, so no transition
+   here — a CSS transition could not be grabbed and reversed mid-flight. */
+.seg {
+  position: relative; display: flex;
+  padding: 3px; border-radius: 10px;
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid var(--hairline);
+}
+.seg-thumb {
+  position: absolute; top: 3px; bottom: 3px; left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 8px; background: var(--accent);
+  box-shadow: var(--shadow-sm);
+  will-change: transform;
+}
+.seg.control .seg-thumb { background: var(--bad); }
+.seg button {
+  position: relative; z-index: 1; flex: 1;
+  padding: .5rem; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: .8125rem; font-weight: 600; letter-spacing: .004em;
+  color: var(--text-2);
+}
+.seg button.on { color: var(--accent-ink); }
+.seg.control button.on { color: #fff; }
+.seg button:disabled { cursor: not-allowed; }
+
+.more { margin-top: 1.05rem; border-top: 1px solid var(--hairline); padding-top: .7rem; }
+.more summary {
+  cursor: pointer; list-style: none;
+  font-size: .75rem; font-weight: 600; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--text-3);
+}
+.more summary::-webkit-details-marker { display: none; }
+.more summary::after { content: " ▸"; }
+.more[open] summary::after { content: " ▾"; }
+.more-body { padding-bottom: .3rem; }
+
+.actions { display: flex; gap: .55rem; margin-top: 1.15rem; }
+button.primary, button.ghost {
+  flex: 1; padding: .7rem; border-radius: 11px; cursor: pointer;
+  font: inherit; font-size: .9375rem; font-weight: 640; letter-spacing: -.004em;
+  border: 1px solid transparent;
+  /* Feedback on press, and short enough to feel instant. */
+  transition: transform 90ms ease-out, filter 90ms ease-out, opacity 140ms;
+}
+button.primary { background: var(--accent); color: var(--accent-ink); box-shadow: var(--shadow-sm); }
+button.ghost { background: rgba(255,255,255,.06); color: var(--text); border-color: var(--hairline); }
+button.primary:active:not(:disabled),
+button.ghost:active:not(:disabled) { transform: scale(.97); filter: brightness(.93); }
+button:disabled { opacity: .38; cursor: not-allowed; }
+
+/* ── roster ─────────────────────────────────────────────────────────── */
+.search-wrap { position: relative; }
+.roster {
+  margin-top: .5rem;
+  max-height: 296px; overflow-y: auto; overscroll-behavior: contain;
+  padding: .45rem;
+  border-radius: var(--r-md);
+  background: rgba(0, 0, 0, .22);
+  border: 1px solid var(--hairline);
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: .35rem; align-content: start;
+  /* Scroll edge effect instead of a hard divider under the sticky header. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 12px,
+                      #000 calc(100% - 12px), transparent);
+          mask-image: linear-gradient(to bottom, transparent, #000 12px,
+                      #000 calc(100% - 12px), transparent);
+  scrollbar-width: thin;
+}
+.roster .rarity {
+  grid-column: 1 / -1;
+  position: sticky; top: -.45rem; z-index: 1;
+  padding: .5rem .15rem .2rem;
+  font-size: .625rem; font-weight: 620;
+  text-transform: uppercase; letter-spacing: .085em;
+  color: var(--text-3);
+  background: linear-gradient(to bottom, rgba(10,12,15,.97) 65%, transparent);
+}
+.cell {
+  position: relative; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: .15rem;
+  padding: .2rem .1rem .25rem;
+  border-radius: 10px;
+  border: 1.5px solid transparent;
+  background: none;
+  will-change: transform;
+}
+.cell:hover { background: rgba(255,255,255,.06); }
+.cell[aria-selected="true"] {
+  border-color: var(--accent);
+  background: rgba(255, 207, 61, .13);
+}
+.cell img {
+  width: 42px; height: 42px; border-radius: 9px;
+  object-fit: cover; background: #0a0d10; display: block;
+}
+.cell .nm {
+  font-size: .5625rem; line-height: 1.15; text-align: center;
+  color: var(--text-3); letter-spacing: .015em;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cell[aria-selected="true"] .nm { color: var(--text); }
+.cell .fallback {
+  width: 42px; height: 42px; border-radius: 9px; background: #0a0d10;
+  display: flex; align-items: center; justify-content: center;
+  font-size: .8125rem; font-weight: 700; color: var(--text-3);
+}
+/* A brawler with its own weights. Nothing has any yet, so no dot appears. */
+.cell.trained::after {
+  content: ""; position: absolute; top: 3px; right: 3px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--good); box-shadow: 0 0 0 1.5px var(--bg-raise);
+}
+/* Manual aim: a small mark, because it changes what the executor sends. */
+.cell.manual .nm::before { content: "◎ "; color: var(--info); }
+.roster .empty { grid-column: 1/-1; padding: 1.4rem; text-align: center; color: var(--text-3); font-size: .8125rem; }
+.roster.locked { opacity: .4; pointer-events: none; }
+
+/* ── viewer ─────────────────────────────────────────────────────────── */
+.screen {
+  position: relative; overflow: hidden;
+  border-radius: var(--r-md);
+  background: #000;
+  border: 1px solid var(--hairline);
+  min-height: 300px;
+  display: flex; align-items: center; justify-content: center;
+}
+.screen img { width: 100%; display: none; }
+.screen img.live { display: block; }
+.placeholder {
+  display: flex; flex-direction: column; gap: .3rem;
+  padding: 2.5rem 1.25rem; text-align: center;
+}
+.ph-title { font-size: .9375rem; font-weight: 560; color: var(--text-2); letter-spacing: -.004em; }
+
+.legend {
+  display: flex; flex-wrap: wrap; gap: .85rem;
+  margin-top: .65rem; font-size: .6875rem; color: var(--text-3);
+  letter-spacing: .015em;
+}
+.legend i.sw {
+  display: inline-block; width: 9px; height: 9px; border-radius: 3px;
+  margin-right: .3rem; vertical-align: -1px; background: var(--c);
+}
+
+/* ── readout ────────────────────────────────────────────────────────── */
+.kv {
+  display: grid; grid-template-columns: auto 1fr;
+  border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.kv .k, .kv .v { padding: .32rem .6rem; font-size: .75rem; }
+.kv .k { color: var(--text-3); letter-spacing: .015em; }
+.kv .v {
+  text-align: right; font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kv > :nth-child(4n+1), .kv > :nth-child(4n+2) { background: rgba(255,255,255,.028); }
+.kv .v.on { color: var(--good); }
+.kv .v.off { color: var(--text-3); }
+.kv .v.alert { color: var(--bad); }
+.kv .v.info { color: var(--info); }
+
+.bars { display: flex; flex-direction: column; gap: .3rem; }
+.row {
+  display: grid; grid-template-columns: 96px 1fr 54px;
+  gap: .5rem; align-items: center; font-size: .6875rem;
+}
+.row .name { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .track { height: 5px; border-radius: 3px; background: rgba(255,255,255,.07); position: relative; }
+.row .fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+.row .fill.pos { background: var(--good); left: 50%; }
+.row .fill.neg { background: var(--bad); right: 50%; }
+.row .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); }
+
+.log {
+  margin: 0; padding: .65rem; max-height: 190px; overflow: auto;
+  background: rgba(0,0,0,.28);
+  border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  font: 400 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-3); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+/* ── accessibility ──────────────────────────────────────────────────── */
+/* Not "no feedback" — a gentler, non-vestibular equivalent. Springs are
+   disabled in JS too; this covers the CSS half. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .12s !important;
+  }
+  button.primary:active, button.ghost:active { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .chrome { background: #0b0d10; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .panel  { background: var(--surface-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .roster { -webkit-mask-image: none; mask-image: none; }
+}
+@media (prefers-contrast: more) {
+  :root { --hairline: rgba(255,255,255,.32); --text-3: #9aa4b2; }
+  .chrome, .panel { background: #0b0d10; }
+  .cell[aria-selected="true"] { outline: 2px solid var(--accent); }
+}

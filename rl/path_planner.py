@@ -184,6 +184,12 @@ class PathPlannerConfig:
     # ground is the conservative reading, and being wrong about it only costs a
     # slightly longer route.
     gas_unknown_dilate_cells: int = 7
+
+    # Fill apparently-clear pockets enclosed by gas. Sized to swallow the
+    # largest plausible false hole — a cluster of wall blocks, a few cells
+    # across — while staying far below the radius of the real safe zone, which
+    # is tens of cells and convex. Set to 0 to disable.
+    gas_close_cells: int = 4
     # Coverage below which a cell counts as safe to STOP on when escaping.
     gas_safe_threshold: float = 0.06
     # How far to search for safe ground when standing in gas. 40 cells is most
@@ -612,7 +618,7 @@ class WaypointPlanner:
     def _gas_field(self) -> np.ndarray:
         """Gas coverage to plan against: what was seen, plus where it is going.
 
-        Two extrapolations, for two different reasons:
+        Three corrections, for three different reasons:
 
           * `gas_dilate_cells` everywhere — the zone only ever shrinks, so a
             clear cell beside the cloud is not neutral ground, it is ground that
@@ -621,6 +627,21 @@ class WaypointPlanner:
             does not stop at the edge of the view, and without this A* routes
             "around" a band by cutting through the unobserved ground just past
             the screen edge, which is the same cloud we have not looked at.
+          * `gas_close_cells` fills HOLES — a small patch of apparently clear
+            ground with cloud on every side is not a refuge, it is a reading we
+            got wrong.
+
+        The hole-filling is the belt to `world_map._fuse_gas`'s braces. That fix
+        addresses the known cause (gas is drawn on the floor, so a wall block
+        inside the cloud reports zero), but the failure it produces — an island
+        of safety enclosed by gas, which is also by construction the *nearest*
+        safe ground and therefore maximally attractive — is bad enough to be
+        worth closing off by geometry too, whatever the cause. A sprite, a
+        pickup, a super effect or an unlucky colour all produce the same hole.
+
+        Closing is one-directional on purpose: it can only ADD gas, and only
+        where the cell is already surrounded by it. The true cloud boundary,
+        which is convex and much larger than the kernel, is untouched.
         """
         cfg = self.config
         world = self.world
@@ -632,6 +653,8 @@ class WaypointPlanner:
             # across the whole map on any skin without a colour profile, where
             # terrain is unreadable but gas is read perfectly well.
             near = np.where(world.gas_unobserved, np.maximum(near, far), near)
+        if cfg.gas_close_cells > 0:
+            near = np.maximum(near, _close_grid(near, cfg.gas_close_cells))
         return near.astype(np.float32)
 
     def _cost_grid(self, enemies, short, inflate: bool = True) -> np.ndarray:
@@ -1008,6 +1031,28 @@ def _dilate_grid(grid: np.ndarray, cells: int) -> np.ndarray:
     k = 2 * int(cells) + 1
     return cv2.dilate(np.ascontiguousarray(grid, dtype=np.float32),
                       np.ones((k, k), np.uint8))
+
+
+def _close_grid(grid: np.ndarray, cells: int) -> np.ndarray:
+    """Morphological closing: fill holes smaller than `cells`, keep the outline.
+
+    Dilate then erode by the same kernel. A hole narrower than the kernel is
+    swallowed on the dilate and not reopened by the erode; the outer boundary
+    is pushed out and then pulled back to where it started. So this fills
+    enclosed pockets without inflating the cloud — the inflation that IS wanted
+    is `gas_dilate_cells`, applied separately and for a different reason.
+
+    Note `cv2.MORPH_CLOSE` on a bordered array would treat the outside as
+    background and eat the edge; doing the two steps explicitly with the
+    default border replication keeps the map edge intact.
+    """
+    if cells <= 0:
+        return grid
+    import cv2
+    k = 2 * int(cells) + 1
+    kernel = np.ones((k, k), np.uint8)
+    g = np.ascontiguousarray(grid, dtype=np.float32)
+    return cv2.erode(cv2.dilate(g, kernel), kernel)
 
 
 def _unit(x: float, y: float) -> Tuple[float, float]:

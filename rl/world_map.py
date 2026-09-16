@@ -305,6 +305,27 @@ class WorldMap:
         ts[vis] += 0.5 * (1.0 - ts[vis])
 
     def _fuse_gas(self, gas: np.ndarray) -> None:
+        """Fuse a gas reading — but only where there was ground to read it off.
+
+        THE POCKET BUG. Gas is an overlay the engine draws on the FLOOR. A wall
+        block has no floor showing, so the detector reads gas=0 over it no
+        matter how deep inside the cloud it sits. The old code fused that zero
+        and stamped the cell `seen_gas`, which reads as "we looked, and it is
+        clear" — the strongest possible claim, from the one place we cannot
+        make it. A cluster of blocks inside the cloud therefore became an
+        island of apparent safety, and since it is enclosed by gas it also
+        looks like the *nearest* safe ground, so the planner steered into it.
+
+        The reading is still fused (a wall cell's own cost is irrelevant — A*
+        will not expand it anyway), but it is NOT credited as observed. That
+        leaves it `gas_unobserved`, which is exactly the state the planner's
+        `gas_unknown_dilate_cells` extrapolation already exists to handle: the
+        cloud gets extended across it from the ground either side.
+
+        Deliberately keyed on occupancy rather than on terrain-explored: on a
+        skin with no colour profile nothing is occupied, so this correctly does
+        nothing rather than declaring the whole map gas-unobserved.
+        """
         cfg = self.config
         win = self._window(gas.shape[1], gas.shape[0])
         if win is None:
@@ -315,8 +336,10 @@ class WorldMap:
         # Asymmetric: believe an increase quickly, a decrease slowly.
         rate = np.where(obs > cur, cfg.gas_rise, cfg.gas_fall).astype(np.float32)
         cur += rate * (obs - cur)
+
+        readable = self.occ_p[msl] <= cfg.occ_threshold
         ts = self.seen_gas[msl]
-        ts += 0.5 * (1.0 - ts)
+        ts[readable] += 0.5 * (1.0 - ts[readable])
 
     # ------------------------------------------------------------------ #
     def apply_reference(self, pose) -> None:

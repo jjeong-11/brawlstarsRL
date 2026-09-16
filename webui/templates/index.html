@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Brawl Stars RL</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<!-- Translucent chrome: content scrolls UNDER it rather than being pushed
+     below an opaque strip, and the scroll-edge mask replaces a hard divider. -->
+<header class="chrome">
+  <div class="wordmark">Brawl&thinsp;Stars&thinsp;RL<span>live decision trace</span></div>
+  <div class="pill" id="statusPill" data-status="idle"><i></i><span>Idle</span></div>
+</header>
+
+<main>
+  <!-- ── session ─────────────────────────────────────────────────────── -->
+  <section class="panel session">
+    <h2>Session</h2>
+
+    <!-- Selected brawler. Sits directly above the grid it reflects: proximity
+         is what makes the relationship obvious without a label saying so. -->
+    <div class="hero" id="hero">
+      <img id="heroIcon" alt="" width="64" height="64">
+      <div class="hero-text">
+        <strong id="heroName">—</strong>
+        <span class="meta" id="heroMeta"></span>
+      </div>
+    </div>
+
+    <div class="facts" id="facts"></div>
+    <p class="note" id="aimNote"></p>
+    <p class="note warn hidden" id="multiWarn">
+      Multi-body brawler — clones and summons read as extra players, so anchor,
+      enemy count and kill attribution are unreliable.
+    </p>
+    <p class="note" id="modelLine">…</p>
+
+    <label for="search">Brawler</label>
+    <div class="search-wrap">
+      <input type="search" id="search" placeholder="Search {{ n_brawlers }}…"
+             autocomplete="off" spellcheck="false" enterkeyhint="done">
+    </div>
+    <div class="roster" id="roster" role="listbox" aria-label="Brawlers"></div>
+
+    <label id="modeLabel">Mode</label>
+    <div class="seg" id="mode" role="radiogroup" aria-labelledby="modeLabel">
+      <span class="seg-thumb" id="segThumb" aria-hidden="true"></span>
+      <button type="button" role="radio" aria-checked="true" class="on" data-mode="observe">Observe</button>
+      <button type="button" role="radio" aria-checked="false" data-mode="control">Control</button>
+    </div>
+    <p class="note" id="modeHint">
+      The policy decides and the planner plans, but no executor is built —
+      nothing is sent to the phone.
+    </p>
+
+    <details class="more">
+      <summary>Options</summary>
+      <div class="more-body">
+        <label for="serial">Device</label>
+        <select id="serial"><option value="">Auto — first device</option></select>
+
+        <label for="fps">Ticks per second <b class="num" id="fpsVal">4</b></label>
+        <input type="range" id="fps" min="1" max="10" step="1" value="4">
+
+        <label for="backend">Control backend</label>
+        <select id="backend">
+          <option value="adb">adb — works everywhere, bursty movement</option>
+          <option value="sendevent">sendevent — smooth held movement</option>
+        </select>
+
+        <label class="check"><input type="checkbox" id="deterministic"><span>Deterministic policy</span></label>
+        <label class="check"><input type="checkbox" id="saveTraces"><span>Also write frames to debugOutput/trace/</span></label>
+
+        <label for="videoPath">Play a recording instead of the phone</label>
+        <input type="text" id="videoPath" placeholder="media/testvideos/….mp4">
+      </div>
+    </details>
+
+    <div class="actions">
+      <button type="button" id="startBtn" class="primary">Press Start</button>
+      <button type="button" id="stopBtn" class="ghost" disabled>Stop</button>
+    </div>
+
+    <p class="note foot">{{ n_brawlers }} brawlers ·
+      {% if trained %}{{ trained|length }} with their own weights
+      {% else %}none trained yet — all fall back to the shared base policy{% endif %}</p>
+  </section>
+
+  <!-- ── trace ───────────────────────────────────────────────────────── -->
+  <section class="panel view">
+    <h2>Trace <span class="meta" id="frameInfo"></span></h2>
+    <div class="screen" id="screen">
+      <img id="stream" alt="live trace">
+      <div class="placeholder" id="placeholder">
+        <span class="ph-title">Pick a brawler and press Start</span>
+        <span class="meta">Annotated frames appear here at tick rate.</span>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i class="sw" style="--c:#2f81f7"></i>player</span>
+      <span><i class="sw" style="--c:#f85149"></i>enemy</span>
+      <span><i class="sw" style="--c:#ff9f1c"></i>box</span>
+      <span><i class="sw" style="--c:#3fb950"></i>cube</span>
+      <span><i class="sw" style="--c:#d371e8"></i>waypoint</span>
+      <span><i class="sw" style="--c:#8b949e"></i>unknown</span>
+    </div>
+  </section>
+
+  <!-- ── readout ─────────────────────────────────────────────────────── -->
+  <section class="panel readout">
+    <h2>Readout</h2>
+    <div class="kv" id="stats"></div>
+    <h3>Reward</h3>
+    <div class="bars" id="breakdown"><p class="note">—</p></div>
+    <h3>Decision</h3>
+    <div class="kv" id="decision"></div>
+    <h3>Log</h3>
+    <pre id="log" class="log"></pre>
+  </section>
+</main>
+
+<script id="rosterData" type="application/json">{{ roster_json|safe }}</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

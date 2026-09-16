@@ -40,20 +40,38 @@ projectv2/
 │   ├── debug_trace.py       annotated "what did it decide, and where is it going"
 │   ├── env.py               BrawlStarsEnv (Gymnasium) — glues everything
 │   └── train.py             Stable-Baselines3 RecurrentPPO
+├── brawlers/            Roster + one weights slot per brawler  (NEW)
+│   ├── roster.json          106 brawlers: id, name, rarity, multi-body flag
+│   ├── abilities.json       class, attack range, thrower flag + confidence
+│   ├── abilities.py         range gate + DERIVED aim mode (auto vs manual)
+│   ├── registry.py          models/<id>/policy.zip -> falls back to the base
+│   └── profiles.py          hook for per-brawler priors (all empty today)
+├── models/              Per-brawler weights: models/<id>/policy.zip  (gitignored)
+├── webui/               Browser front end  (NEW)
+│   ├── runner.py            the watch_live tick, on a background thread
+│   ├── app.py               Flask: start/stop + MJPEG trace stream
+│   └── templates/ static/   the page
 ├── scripts/             Entry points you actually run
+│   ├── run_webui.py         the web UI: pick a brawler, press Start  ← start here
 │   ├── run_live.py          perception-only status loop
 │   ├── run_prototype.py     perception -> reward loop on real footage  ← the prototype
 │   ├── train_rl.py          PPO training
 │   ├── watch_live.py        watch rewards + decisions without sending input
 │   ├── measure_latency.py   how many ticks until an action reaches the screen
 │   └── check_perception.py  PRE-FLIGHT: per-stage perception health check
+├── docs/BRAWLERS.md     GENERATED reference: every brawler's class, range,
+│                        aim mode and where each number came from
 ├── tests/               pytest suite: `python -m pytest`
 │   ├── test_planner.py      planner + world map + gas, in a scrolling sim
 │   ├── test_rewards.py      reward engine
 │   ├── test_mapdb.py        arena extraction sanity
 │   └── test_localize.py     identification, and refusing to guess
 ├── tools/               Offline utilities (harvest templates, classifier,
-│                        calibrate_map.py, behaviour_clone.py)
+│                        calibrate_map.py, behaviour_clone.py,
+│                        sync_brawlers.py       = roster + portraits
+│                        sync_brawler_abilities.py = exact ranges from the
+│                                                    game's own CSVs
+│                        dump_brawler_reference.py = docs/BRAWLERS.md)
 ├── media/               fixtures/ (calibration screenshots) showdownmaps/
 │                        testphotos/ crops/ gasphotos/
 ├── training_data/       username-classifier dataset
@@ -415,6 +433,273 @@ confusing failures live.
 without touching the phone, so you can stand next to a wall or in the gas on purpose
 and see what it would have done.
 
+## The web UI (`scripts/run_webui.py`)
+
+```bash
+pip install flask
+python scripts/run_webui.py            # -> http://127.0.0.1:5000
+```
+
+Pick the brawler you are playing, press **Start**, and the same annotated frames
+`--trace` writes to disk stream into the browser as they are produced. It is the
+same tick as `watch_live.py --trace`, moved onto a background thread so a request
+can start and stop it — deliberately reusing `rl/debug_trace.DecisionTracer.render`
+rather than drawing its own overlay, because a second renderer would drift from the
+first the moment either changed and then the picture would stop being evidence.
+
+The picker is a searchable portrait grid, and **the whole roster is inlined into the
+page**. Choosing a brawler is a local lookup with no request behind it — the first
+version fetched `/api/brawlers/<id>` on every change, so a single failed request
+left the picker looking dead with nothing on screen to say why. The only thing that
+can fail now is the page load itself, which is visible.
+
+Portraits come from [Brawlify's CDN](https://github.com/Brawlify/CDN) (MIT, no
+traffic limit, meant to be linked programmatically) through `/api/icon/<id>`, which
+serves a local file if one is cached and redirects to the CDN otherwise. So
+`tools/sync_brawlers.py --icons` changes nothing in the markup — it only buys
+offline use and a faster first paint. A portrait that fails to load falls back to
+the brawler's initials rather than leaving a broken-image hole in a 106-tile grid.
+
+**Two modes, and the difference is structural.** *Observe* (the default) asks the
+policy for an action and runs the planner, but **no executor is constructed**, so
+there is nothing that could send a touch. *Control* builds one and the bot plays.
+The split lives in exactly one function (`SessionRunner._build_executor`), so
+observe mode cannot half-send anything — the safety is the absence of an object,
+not a flag several call sites have to remember to check. `tests/test_brawlers.py`
+asserts it directly, because structural claims are the ones that quietly stop being
+true during a refactor.
+
+No phone handy? Point *Options → play a recording instead of the phone* at an mp4
+and the whole loop runs offline.
+
+The picture and the numbers arrive on separate channels: the `<img>` takes an MJPEG
+stream so frames render at tick rate with no JS in the path, while the readout polls
+`/api/status`. A stalled poll cannot freeze the video and a slow frame cannot hold
+up the numbers.
+
+### One set of weights per brawler
+
+Choosing a brawler picks which policy loads:
+
+```
+models/<brawler>/policy.zip      trained for this brawler
+brawlstars_move.zip              the shared base policy      ← everything, today
+(nothing)                        random headings; the planner still runs
+```
+
+A single policy has to average over every brawler in the game, and they want
+contradictory things over the *same* 60-number observation: Edgar wants to close
+distance, Piper wants the opposite, Barley wants a wall in between. One network
+trained on all of them learns the mean of those contradictions, which is nobody's
+strategy — so the weights are split now, while the path layout is still free to
+change.
+
+Nothing is trained yet, so every brawler resolves to the shared base and **the page
+says so in as many words**. That line is not decoration: brawler-specific and base
+weights produce visually identical sessions, so a silent fallback stays invisible
+until someone concludes Piper's tuned policy is bad when it was never loaded. The
+fallback is also not scaffolding to delete later — it stays useful as the
+initialisation each new brawler's run forks from, so brawler #40 does not start from
+random weights.
+
+To add weights, drop the file at `models/<id>/policy.zip` (ids come from
+`brawlers/roster.json`). There is nothing to register and no cache to invalidate;
+`slot()` checks the filesystem on every call. `registry.prepare("piper")` creates the
+directory layout a training run should save into.
+
+Brawlers flagged `multi_body` in the roster (Nita, Jessie, Sirius, Kit…) warn on
+start: clones, summons and pets are read by the perception stack as additional
+players, so anchor, enemy count and kill attribution are all suspect — the same
+reason the old Sirius recordings were deleted rather than kept as fixtures. The
+list is deliberately over-inclusive; over-warning is the safe direction.
+
+### The roster is generated, not authored
+
+```bash
+python tools/sync_brawlers.py                    # dry run: show the diff
+python tools/sync_brawlers.py --write --icons    # apply + cache portraits
+```
+
+`brawlers/roster.json` is 106 brawlers across 7 rarities, pulled from
+[BrawlAPI](https://brawlapi.com/). Run the sync after a season update, because the
+roster is not stable data in either direction: new brawlers ship every season, and
+whole rarity tiers get reshuffled — **Chromatic existed for three years and then
+vanished** in the January 2024 progression overhaul, its brawlers redistributed into
+Epic (Gale, Colette, Belle, Lola, Ash, Sam, Mandy, Maisie, Pearl…), Mythic (Lou,
+Ruffs, Buzz, Fang, Eve, Janet, Otis, R-T, Charlie, Buster…) and Legendary (Surge,
+Cordelius).
+
+A stale rarity fails *silently* — the picker still renders, it just groups brawlers
+under a tier the game no longer has, and nothing about the running session looks
+wrong. So `tests/test_brawlers.py` asserts Chromatic is absent and that every rarity
+present appears in `rarity_order`, since a tier missing from that list drops its
+brawlers out of the grouped view entirely.
+
+The sync overwrites everything except `multi_body`, which is our own judgement
+rather than an API field, and reports brawlers new since the last run so you can set
+it for them.
+
+### Range and aim are per brawler (`brawlers/abilities.py`)
+
+The first per-brawler advantage is already in, and it needed no training at all.
+
+**The range gate used to be one number for everyone** — don't shoot past 42% of
+the screen's short side — which is wrong in both directions at once. Edgar
+reaches about 3 tiles and was firing at four times that, paying `attack_cost` to
+spray at people he cannot touch; Piper reaches 10 and was being cut off early.
+`brawlers/abilities.json` has the real range for all 106, so the gate uses it.
+
+Converting tiles to pixels needs one calibration number — how many tiles the
+camera shows across the play area — and **that number is an estimate that has
+not been measured on this setup**. So the conversion is arranged to fail safe:
+
+```
+effective = min(max_range_frac, brawler_tiles / tiles_across_screen)
+```
+
+The per-brawler term can only ever make the gate *tighter* than the old global
+one. If the calibration is wrong the worst case is the behaviour we already had,
+and every improvement is on the short-range brawlers who were wasting shots.
+`tests/test_abilities.py` asserts that property directly, because it is the
+entire reason it is safe to ship unverified. Measure `tiles_across_screen` and
+flip `range_gate_is_ceiling` to let the real range govern both ways.
+
+**Aim mode is derived, never listed.** A hand-written list of 106 aim modes is
+106 opinions that rot independently; a rule over two published facts is one
+opinion you can argue with and re-apply after a rebalance:
+
+| Condition | Mode | Why |
+| --- | --- | --- |
+| class = Artillery | **manual** | arcs over walls, and auto-aim will not fire without line of sight — an auto-aiming thrower throws away the one thing it is for |
+| class = Marksman | **manual** | one slow single projectile that has to be led, and auto-aim fires at where the enemy *is* |
+| range ≥ 9.5 tiles | **manual** | travel time scales with range, so the lead problem is really a range problem; catches 8-Bit, Byron, R-T, Rico, Leon |
+| otherwise | **auto** | lead error is smaller than the target, and auto-aim already picks the nearest enemy in range |
+
+That gives **24 manual, 82 auto**. Manual aim is a new executor capability:
+`AdbExecutor._aimed_press` presses the fire button, drags out to swing the aim
+indicator, and releases — the same DOWN/MOVE/UP gesture the movement stick uses,
+for the same reason. For a thrower the drag *length* also sets where the shot
+lands, so it scales with distance rather than always deflecting fully.
+
+One trap worth knowing: a drag shorter than the system's tap slop is delivered
+as a **tap**, which fires an auto-aimed shot. An under-length aim therefore does
+not merely aim badly, it silently switches mode — hence `aim_min_radius`.
+
+#### Where the numbers came from
+
+`python tools/dump_brawler_reference.py` regenerates
+[docs/BRAWLERS.md](docs/BRAWLERS.md) from the data, so the document cannot drift
+from the behaviour. Every row carries its own `confidence` and `sources`:
+
+| Level | Meaning | Rows |
+| --- | --- | --- |
+| `gamefile` | read from the game's own data files | 0 |
+| `measured` | exact tile value stated by a source, cross-checked | 10 |
+| `bucket` | only a range *band* is published, so the value is a band midpoint | 95 |
+| `unknown` | no published range yet (Bolt) — the gate stays permissive rather than guessing | 1 |
+
+Most published ranges are bands, not numbers, which is why the gate uses
+`range_max` rather than the midpoint: letting a marginal shot through costs
+`attack_cost` (0.05), blocking a real one costs a kill.
+
+```bash
+python tools/sync_brawler_abilities.py --write   # -> every row becomes "gamefile"
+```
+
+That joins the game's own `csv_logic/characters` and `csv_logic/skills` — the
+files the game itself reads, no wiki in the loop — and refuses to write anything
+outside a plausible tile range, because a units change is exactly the kind of
+silent break that would poison every gate at once.
+
+The Artillery set was cross-checked against three independent sources before
+being written; they agree on exactly eight brawlers, and a test pins that.
+
+### Per-brawler advantages come next (`brawlers/profiles.py`)
+
+Separate weights let each brawler *learn* something different. `profiles.py` is for
+what we already know and would otherwise pay tens of thousands of samples to
+rediscover. The precedent is gas: there is no "moved toward gas" reward term because
+gas is a cost layer in the A\* grid, so the agent routes around the cloud from the
+first frame at zero sample cost. Range preference is the same kind of fact.
+
+A profile is pure data — override dicts layered onto the existing `RewardConfig`,
+`CombatConfig` and `PathPlannerConfig` — never a fork of the logic. An override that
+only tunes an existing knob cannot introduce a behaviour the trace panel does not
+already display; a per-brawler `decide()` fork could, and then a bad brawler script
+and a bad policy become indistinguishable in the trace, which is exactly the
+confusion `debug_trace.py` exists to prevent.
+
+Every profile is empty today, so behaviour is bit-for-bit identical to having none.
+That is the point: the seam and the call sites land now, while there is nothing to
+regress. **When you fill one in, measure it** — `preferred_range` is not a fact about
+a brawler, it is a claim about what wins, and it deserves the same treatment as the
+attack-gating and box-shaping numbers above.
+
+### Four bugs that all looked identical from the outside
+
+Every one of these showed up as "the agent walks somewhere stupid", which is why
+they took so long to separate. A phantom wall, a false safe pocket and last
+match's map all render as a perfectly sensible A\* route around nothing.
+
+**Unrecognised ground counted as a wall.** `find_terrain` classified a cell as
+blocked whenever too little of it matched *floor or bush* — so anything the
+palette could not explain became solid. On this project's own committed fixture,
+with the best-matching profile, **39% of pixels match no class at all** and 47%
+of the grid came back blocked, on a map that is 30-50% obstacles.
+
+Blocked now requires positive evidence from the **wall** palette. Cells that
+match nothing are reported `unknown`, which `world_map.py` already handled
+correctly: unknown cells are never fused, so they keep the optimistic prior and
+fill in later from a frame where the camera has moved, or from the published
+layout once `localize.py` identifies the arena. Measured on the same fixture:
+47% blocked → **16% wall + 10% off-map, 17% unknown**.
+
+Enumerating walkable surfaces is still right — the obstacle list is endless. The
+fix is not to enumerate obstacles, it is to stop treating "I do not recognise
+this" as an answer.
+
+**Bushes read as walls.** Same root cause with a specific trigger: the gas
+overlay tints a bush, its hue leaves the bush bounds, the cell matches nothing,
+and it became solid — so the agent avoided exactly the cover it should have been
+using. Bush is walkable ground in Brawl Stars, full stop, so that is now applied
+as a fact about the game rather than a threshold on the palette: enough bush in a
+cell makes it free whatever else it reads as. 25 bush cells were blocked on the
+fixture before; zero now, across all six committed fixtures.
+
+**...but off-map decoration still has to be blocked.** Junk past the arena
+border matches no palette either, and making it merely `unknown` would tell the
+agent it may walk off the map — and would silently disarm `border_cost`, which
+infers "near the edge" from blocked ground nearby with no map knowledge. The two
+cases are told apart *topologically*: unclassified ground **connected to the
+frame edge** is off-map and blocked; unclassified **islands** enclosed by
+classified terrain are genuinely unreadable and stay unknown. Reported separately
+as `off_map` so nothing downstream confuses "impassable" with "looks like a wall".
+
+**Safe pockets inside the gas.** Gas is drawn on the *floor*, so a wall block
+inside the cloud reports gas=0 however deep it sits. Fusing that zero as an
+observation was the strongest possible claim from the one place it cannot be
+made, and the result — an island of apparent safety enclosed by cloud, which is
+also by construction the *nearest* safe ground — is maximally attractive to the
+planner. Two changes: `_fuse_gas` no longer credits `seen_gas` where there was no
+ground to read it off, leaving those cells to the extrapolation that already
+exists for off-screen gas; and `_gas_field` closes holes smaller than
+`gas_close_cells`, so an enclosed pocket cannot look safe whatever caused it.
+Closing only ever adds gas and only where it is already surrounded, so the true
+cloud boundary — convex, tens of cells across — is untouched.
+
+**Exit was never pressed, and the map never cleared.** `rl/env.py:reset()` does
+this correctly; `webui/runner.py` reimplemented the per-step work and omitted the
+whole episode lifecycle. It now detects the boundary two ways — we saw the match
+end (results screen or death screen), or we are suddenly in a match having not
+been — then drives the menus with `navigate_to_match` in control mode and rebuilds
+the planner, world map, camera tracker, terrain profile and perception smoothing.
+
+The second trigger is what covers observe mode, where nobody asked us to tap
+anything and the human just played on. Without it the fused map from the previous
+arena stays layered over the new one, and because the map is camera-registered
+the stale layout drags the coordinate frame with it — which is why position looked
+reset while the geometry did not.
+
 ### Checkpoints are not interchangeable
 
 | directory | design | obs |
@@ -448,6 +733,9 @@ calibrate the button coordinates for your Pixel (see the Android doc).
 
 ```bash
 pip install -r requirements.txt        # + system tesseract for OCR
+
+# the web UI: pick a brawler, press Start, watch the trace live:
+python scripts/run_webui.py            # -> http://127.0.0.1:5000
 
 # watch the reward function run on a recorded match (the working prototype):
 python scripts/run_prototype.py --video media/testvideos/test_game3.mp4 --start 12

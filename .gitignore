@@ -31,6 +31,16 @@ checkpoints_*/
 tb_logs/
 *.tmp
 
+# Per-brawler weights (models/<brawler>/policy.zip + checkpoints). Large,
+# regenerable, and tied to one machine's calibration. models/README.md IS
+# tracked, so a fresh clone still gets the directory and the layout docs.
+models/*/
+
+# Cached brawler portraits (tools/sync_brawlers.py --icons). Supercell assets
+# mirrored from cdn.brawlify.com — not ours to redistribute, and not needed:
+# the UI falls back to the CDN per-image when the file is absent.
+webui/static/icons/
+
 # --- KEPT ON PURPOSE, do not add these --------------------------------------
 # media/fixtures/                             committed calibration screenshots;
 #                                             tests/conftest.py asserts on showdown.png

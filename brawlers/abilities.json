@@ -1,0 +1,1603 @@
+{
+  "_comment": "Per-brawler combat facts: attack range and whether the attack arcs over walls. Consumed by brawlers/abilities.py, which DERIVES the aim mode from these rather than storing it -- a derived value in a data file drifts. Refresh exact ranges with `python tools/sync_brawler_abilities.py --write`, which joins the game's own characters.csv + skills.csv and upgrades every `confidence` to \"gamefile\".",
+  "_confidence": {
+    "gamefile": "read from the game's own data files. Exact.",
+    "measured": "an exact tile value stated by a source, cross-checked.",
+    "bucket": "only a range BAND is published, so range_tiles is the band midpoint. Good enough to gate a shot, not to tune one.",
+    "unknown": "no published range yet (a brand-new brawler). The range gate treats these as permissive rather than guessing."
+  },
+  "_sources": [
+    "brawlplanet.com/tier-list/attack_range",
+    "brawlplanet.com/brawlers",
+    "liquipedia.net/brawlstars/Artillery + brawlstars.fandom.com + pockettactics.com"
+  ],
+  "_fetched": "2026-08-13",
+  "brawlers": [
+    {
+      "id": "shelly",
+      "name": "SHELLY",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "colt",
+      "name": "COLT",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "bull",
+      "name": "BULL",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "brock",
+      "name": "BROCK",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "rico",
+      "name": "RICO",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 9.7,
+      "range_min": 9.7,
+      "range_max": 9.7,
+      "confidence": "measured",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "spike",
+      "name": "SPIKE",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "barley",
+      "name": "BARLEY",
+      "class": "Artillery",
+      "lobs_over_walls": true,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "liquipedia.net/brawlstars/Artillery + brawlstars.fandom.com + pockettactics.com",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "jessie",
+      "name": "JESSIE",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "nita",
+      "name": "NITA",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "dynamike",
+      "name": "DYNAMIKE",
+      "class": "Artillery",
+      "lobs_over_walls": true,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "liquipedia.net/brawlstars/Artillery + brawlstars.fandom.com + pockettactics.com",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "el_primo",
+      "name": "EL PRIMO",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "mortis",
+      "name": "MORTIS",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "crow",
+      "name": "CROW",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "poco",
+      "name": "POCO",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "bo",
+      "name": "BO",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "piper",
+      "name": "PIPER",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 10.0,
+      "range_min": 10.0,
+      "range_max": 10.0,
+      "confidence": "measured",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "pam",
+      "name": "PAM",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "tara",
+      "name": "TARA",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "darryl",
+      "name": "DARRYL",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "penny",
+      "name": "PENNY",
+      "class": "Artillery",
+      "lobs_over_walls": true,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "liquipedia.net/brawlstars/Artillery + brawlstars.fandom.com + pockettactics.com",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "frank",
+      "name": "FRANK",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "gene",
+      "name": "GENE",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "tick",
+      "name": "TICK",
+      "class": "Artillery",
+      "lobs_over_walls": true,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "liquipedia.net/brawlstars/Artillery + brawlstars.fandom.com + pockettactics.com",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "leon",
+      "name": "LEON",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 9.7,
+      "range_min": 9.7,
+      "range_max": 9.7,
+      "confidence": "measured",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "rosa",
+      "name": "ROSA",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 4.2,
+      "range_min": 3.5,
+      "range_max": 4.9,
+      "range_tier": "D",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "carl",
+      "name": "CARL",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "bibi",
+      "name": "BIBI",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 4.2,
+      "range_min": 3.5,
+      "range_max": 4.9,
+      "range_tier": "D",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "8_bit",
+      "name": "8-BIT",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 10.0,
+      "range_min": 10.0,
+      "range_max": 10.0,
+      "confidence": "measured",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "sandy",
+      "name": "SANDY",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "bea",
+      "name": "BEA",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 10.0,
+      "range_min": 10.0,
+      "range_max": 10.0,
+      "confidence": "measured",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "emz",
+      "name": "EMZ",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "mr_p",
+      "name": "MR. P",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "max",
+      "name": "MAX",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "jacky",
+      "name": "JACKY",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "gale",
+      "name": "GALE",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "nani",
+      "name": "NANI",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "sprout",
+      "name": "SPROUT",
+      "class": "Artillery",
+      "lobs_over_walls": true,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "liquipedia.net/brawlstars/Artillery + brawlstars.fandom.com + pockettactics.com",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "surge",
+      "name": "SURGE",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "colette",
+      "name": "COLETTE",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "amber",
+      "name": "AMBER",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "lou",
+      "name": "LOU",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "byron",
+      "name": "BYRON",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 10.0,
+      "range_min": 10.0,
+      "range_max": 10.0,
+      "confidence": "measured",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "edgar",
+      "name": "EDGAR",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "ruffs",
+      "name": "RUFFS",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "stu",
+      "name": "STU",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "belle",
+      "name": "BELLE",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 10.0,
+      "range_min": 10.0,
+      "range_max": 10.0,
+      "confidence": "measured",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "squeak",
+      "name": "SQUEAK",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "grom",
+      "name": "GROM",
+      "class": "Artillery",
+      "lobs_over_walls": true,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "liquipedia.net/brawlstars/Artillery + brawlstars.fandom.com + pockettactics.com",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "buzz",
+      "name": "BUZZ",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "griff",
+      "name": "GRIFF",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "ash",
+      "name": "ASH",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 4.2,
+      "range_min": 3.5,
+      "range_max": 4.9,
+      "range_tier": "D",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "meg",
+      "name": "MEG",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "lola",
+      "name": "LOLA",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "fang",
+      "name": "FANG",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "eve",
+      "name": "EVE",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "janet",
+      "name": "JANET",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 4.2,
+      "range_min": 3.5,
+      "range_max": 4.9,
+      "range_tier": "D",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "bonnie",
+      "name": "BONNIE",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "otis",
+      "name": "OTIS",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "sam",
+      "name": "SAM",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "gus",
+      "name": "GUS",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "buster",
+      "name": "BUSTER",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "chester",
+      "name": "CHESTER",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "gray",
+      "name": "GRAY",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "mandy",
+      "name": "MANDY",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "r_t",
+      "name": "R-T",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 10.0,
+      "range_min": 10.0,
+      "range_max": 10.0,
+      "confidence": "measured",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "willow",
+      "name": "WILLOW",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "maisie",
+      "name": "MAISIE",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "hank",
+      "name": "HANK",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "cordelius",
+      "name": "CORDELIUS",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "doug",
+      "name": "DOUG",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "pearl",
+      "name": "PEARL",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "chuck",
+      "name": "CHUCK",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "charlie",
+      "name": "CHARLIE",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "mico",
+      "name": "MICO",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 4.2,
+      "range_min": 3.5,
+      "range_max": 4.9,
+      "range_tier": "D",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "kit",
+      "name": "KIT",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 4.2,
+      "range_min": 3.5,
+      "range_max": 4.9,
+      "range_tier": "D",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "larry_and_lawrie",
+      "name": "LARRY & LAWRIE",
+      "class": "Artillery",
+      "lobs_over_walls": true,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "liquipedia.net/brawlstars/Artillery + brawlstars.fandom.com + pockettactics.com",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "melodie",
+      "name": "MELODIE",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "angelo",
+      "name": "ANGELO",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 10.0,
+      "range_min": 10.0,
+      "range_max": 10.0,
+      "confidence": "measured",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "draco",
+      "name": "DRACO",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 4.2,
+      "range_min": 3.5,
+      "range_max": 4.9,
+      "range_tier": "D",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "lily",
+      "name": "LILY",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "berry",
+      "name": "BERRY",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "clancy",
+      "name": "CLANCY",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "moe",
+      "name": "MOE",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "kenji",
+      "name": "KENJI",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "shade",
+      "name": "SHADE",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 4.2,
+      "range_min": 3.5,
+      "range_max": 4.9,
+      "range_tier": "D",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "juju",
+      "name": "JUJU",
+      "class": "Artillery",
+      "lobs_over_walls": true,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "liquipedia.net/brawlstars/Artillery + brawlstars.fandom.com + pockettactics.com",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "meeple",
+      "name": "MEEPLE",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "ollie",
+      "name": "OLLIE",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "lumi",
+      "name": "LUMI",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "finx",
+      "name": "FINX",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "jae_yong",
+      "name": "JAE-YONG",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "kaze",
+      "name": "KAZE",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "alli",
+      "name": "ALLI",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "trunk",
+      "name": "TRUNK",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "mina",
+      "name": "MINA",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "ziggy",
+      "name": "ZIGGY",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "pierce",
+      "name": "PIERCE",
+      "class": "Marksman",
+      "lobs_over_walls": false,
+      "range_tiles": 10.0,
+      "range_min": 10.0,
+      "range_max": 10.0,
+      "confidence": "measured",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "gigi",
+      "name": "GIGI",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "glowy",
+      "name": "GLOWY",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "sirius",
+      "name": "SIRIUS",
+      "class": "Controller",
+      "lobs_over_walls": false,
+      "range_tiles": 7.2,
+      "range_min": 6.5,
+      "range_max": 7.9,
+      "range_tier": "B",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "najia",
+      "name": "NAJIA",
+      "class": "Damage Dealer",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "damian",
+      "name": "DAMIAN",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": 2.7,
+      "range_min": 2.0,
+      "range_max": 3.4,
+      "range_tier": "F",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "starr_nova",
+      "name": "STARR NOVA",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 5.7,
+      "range_min": 5.0,
+      "range_max": 6.4,
+      "range_tier": "C",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "bolt",
+      "name": "BOLT",
+      "class": "Tank",
+      "lobs_over_walls": false,
+      "range_tiles": null,
+      "range_min": null,
+      "range_max": null,
+      "confidence": "unknown",
+      "sources": [
+        "brawlplanet.com/brawlers"
+      ]
+    },
+    {
+      "id": "nori",
+      "name": "NORI",
+      "class": "Assassin",
+      "lobs_over_walls": false,
+      "range_tiles": 4.2,
+      "range_min": 3.5,
+      "range_max": 4.9,
+      "range_tier": "D",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    },
+    {
+      "id": "wendy",
+      "name": "WENDY",
+      "class": "Support",
+      "lobs_over_walls": false,
+      "range_tiles": 8.7,
+      "range_min": 8.0,
+      "range_max": 9.4,
+      "range_tier": "A",
+      "confidence": "bucket",
+      "sources": [
+        "brawlplanet.com/brawlers",
+        "brawlplanet.com/tier-list/attack_range"
+      ]
+    }
+  ]
+}

@@ -9,11 +9,38 @@ does not need pixel-perfect wall outlines, it needs to know which cells of a
 small grid it can walk through. So we classify every pixel into one of three
 terrain classes, then pool the result down into a grid.
 
-WALKABILITY RULE — walkable = floor OR bush, everything else is an obstacle.
+WALKABILITY RULE — three outcomes, not two: FREE, BLOCKED, or NO IDEA.
 
-Stated positively on purpose: enumerating obstacles ("walls, cones, barrels,
-fences, the out-of-bounds junk past the map border...") is an endless list that
-grows with every map, while the two walkable surfaces are fixed.
+    free    = floor OR bush covers most of the cell
+    blocked = the WALL palette covers enough of the cell
+    unknown = neither — the profile cannot explain this ground
+
+The third outcome is the important one, and it was missing. The rule used to be
+"walkable, or else obstacle", which is only sound if the palette explains every
+pixel — and it never does. Shadows, decorations, water, ramps, spawn markers,
+super effects, and above all **bushes with the gas overlay tinted over them**
+all fall outside floor/bush, and every one of them became a phantom wall. On
+this project's own committed fixture, with the best-matching profile, 39% of
+pixels matched no class at all.
+
+That failure is worse than it looks, because a phantom wall and a real one are
+indistinguishable downstream: the agent walks into open ground it believes is
+solid, and the trace shows a perfectly sensible A* route around nothing.
+
+So BLOCKED now requires positive evidence of a wall. Cells the profile cannot
+explain are reported `unknown`, which `rl/world_map.py` already handles properly
+— unknown cells are not fused at all, so they keep the optimistic `occ_prior`
+and get filled in later from a frame where the camera has moved, or from the
+published layout once `perception/localize.py` identifies the arena.
+
+Enumerating walkable surfaces is still the right instinct (the obstacle list is
+endless and grows with every map). The fix is not to enumerate obstacles — it is
+to stop treating "I do not recognise this" as an answer.
+
+BUSH IS NEVER AN OBSTACLE. A cell with a real bush fraction is walkable ground,
+full stop, whatever the rest of the cell reads as. That is a fact about the game
+rather than about the palette, so it is applied before any threshold — which is
+what stops a gas-tinted or half-shadowed bush from reading as a wall.
 
 MAP PROFILES — AND WHY THEY EXIST
 ---------------------------------
@@ -163,6 +190,13 @@ MIN_PROFILE_COVERAGE = 0.30
 # A* route around walls that are not there.
 MAX_BLOCKED_FRACTION = 0.72
 
+# The same refusal, for the other failure mode. Now that unrecognised ground is
+# reported `unknown` instead of `blocked`, a profile that fits badly no longer
+# trips MAX_BLOCKED_FRACTION — it produces a grid that is almost entirely
+# unknown, which is not a map, it is an empty answer wearing the shape of one.
+# Say so, so the caller falls back to direct steering as it always did.
+MAX_UNKNOWN_FRACTION = 0.85
+
 # Back-compat aliases (the module used to export bare constants).
 FLOOR_LOWER, FLOOR_UPPER = NIGHT_TEAL.floor
 WALL_LOWER, WALL_UPPER = NIGHT_TEAL.wall
@@ -181,6 +215,27 @@ GRID_H = 27
 # Below 0.5 the planner cuts corners through wall edges; above ~0.75 it
 # refuses to use legitimate one-cell-wide gaps between blocks.
 WALKABLE_FRACTION = 0.55
+
+# A cell counts as BLOCKED when at least this fraction of it matches the WALL
+# palette. Lower than WALKABLE_FRACTION on purpose and not by accident: a wall
+# block is drawn with a lit top face, a shaded side and an outline, so only the
+# middle band lands inside the bounds. Requiring a majority would miss most real
+# walls. What matters is that this is positive evidence — the old rule inferred
+# a wall from the ABSENCE of floor, which is not evidence of anything.
+WALL_FRACTION = 0.30
+
+# Below this, the profile has explained so little of the cell that neither
+# threshold means anything, and the cell is reported `unknown` rather than
+# guessed at. Set at a third: enough that a cell reading mostly-nothing is
+# refused, low enough that a normal cell with sprites and shadows in it still
+# gets classified.
+MIN_CLASSIFIED_FRACTION = 0.34
+
+# Bush is walkable ground in Brawl Stars, always. A cell with this much bush is
+# free regardless of what the rest of it reads as — which is the specific fix
+# for bushes under the gas overlay, whose hue shifts out of the bush bounds and
+# used to leave the cell looking like a wall.
+BUSH_WALKABLE_FRACTION = 0.25
 
 # HUD overlays sit ON TOP of real terrain, so the pixels underneath cannot be
 # classified. These regions are marked UNKNOWN and inherit the walkability of
@@ -327,6 +382,33 @@ class ProfileSelector:
 _DEFAULT_SELECTOR = ProfileSelector()
 
 
+def _flood_from_border(mask: np.ndarray) -> np.ndarray:
+    """The subset of `mask` reachable from the grid edge, 4-connected.
+
+    Separates "off the map" from "could not read this". Both are cells the
+    palette failed to explain; the difference is topological — the out-of-play
+    decoration is one region touching the frame edge, while genuinely
+    unreadable ground (an effect, a sprite, a shadow) is an island surrounded by
+    terrain that did classify.
+
+    `cv2.floodFill` needs a seed point, and there is no single one that works —
+    a corner may be classified terrain, or covered by the HUD. Labelling the
+    components and keeping those with any border cell is seed-free and costs
+    nothing on a 48x27 grid.
+    """
+    if not mask.any():
+        return np.zeros_like(mask, dtype=bool)
+    n, labels = cv2.connectedComponents(mask.astype(np.uint8), connectivity=4)
+    if n <= 1:
+        return np.zeros_like(mask, dtype=bool)
+    edge = np.concatenate([labels[0, :], labels[-1, :],
+                           labels[:, 0], labels[:, -1]])
+    touching = set(int(v) for v in np.unique(edge) if v != 0)
+    if not touching:
+        return np.zeros_like(mask, dtype=bool)
+    return np.isin(labels, list(touching))
+
+
 def _pool_fraction(mask: np.ndarray, gw: int, gh: int) -> np.ndarray:
     """Mean of a 0/255 mask over a gh x gw grid, as a 0..1 float array."""
     small = cv2.resize(mask, (gw, gh), interpolation=cv2.INTER_AREA)
@@ -336,7 +418,8 @@ def _pool_fraction(mask: np.ndarray, gw: int, gh: int) -> np.ndarray:
 def find_terrain(image_bgr: np.ndarray, grid_size=(GRID_W, GRID_H),
                  hsv: np.ndarray = None, walkable_fraction: float = WALKABLE_FRACTION,
                  player_pos=None, profile: TerrainProfile = None,
-                 selector: ProfileSelector = None) -> Optional[dict]:
+                 selector: ProfileSelector = None,
+                 wall_fraction: float = WALL_FRACTION) -> Optional[dict]:
     """Segment terrain and pool it into a walkability grid.
 
     Returns None when no profile matches the frame -- callers must treat that
@@ -344,10 +427,23 @@ def find_terrain(image_bgr: np.ndarray, grid_size=(GRID_W, GRID_H),
     falls back to direct steering.
 
     Otherwise a dict with
-        occupancy : (gh, gw) bool  — True = BLOCKED
+        occupancy : (gh, gw) bool  — True = BLOCKED. Either positive wall
+                                     evidence, or off_map (below).
         walkable  : (gh, gw) float — fraction of the cell that is walkable
         bush      : (gh, gw) float — fraction that is bush (cover)
-        unknown   : (gh, gw) bool  — cell was mostly hidden behind HUD
+        wall      : (gh, gw) float — fraction that matched the wall palette
+        off_map   : (gh, gw) bool  — unclassified ground CONNECTED to the frame
+                                     edge: the decoration past the arena border.
+                                     Blocked by topology rather than by colour,
+                                     which is why it is reported separately —
+                                     `border_cost` and any diagnostic that asks
+                                     "does this look like a wall?" need to tell
+                                     the two apart.
+        unknown   : (gh, gw) bool  — hidden behind the HUD, OR too little of the
+                                     cell matched any class to call it. Callers
+                                     must treat these as "no information" — see
+                                     the module docstring; treating them as
+                                     walls is the bug this replaced.
         rect      : (x, y, w, h)   — play rect these grids cover, in frame px
         cell      : (cw, ch)       — cell size in frame pixels
         profile   : TerrainProfile — which palette was used
@@ -382,6 +478,7 @@ def find_terrain(image_bgr: np.ndarray, grid_size=(GRID_W, GRID_H),
 
     walk_frac = _pool_fraction(cv2.bitwise_and(masks["walkable"], known), gw, gh)
     bush_frac = _pool_fraction(cv2.bitwise_and(masks["bush"], known), gw, gh)
+    wall_frac = _pool_fraction(cv2.bitwise_and(masks["wall"], known), gw, gh)
     known_frac = _pool_fraction(known, gw, gh)
 
     # Renormalise by how much of the cell we could actually see, so a cell
@@ -389,14 +486,62 @@ def find_terrain(image_bgr: np.ndarray, grid_size=(GRID_W, GRID_H),
     visible = np.maximum(known_frac, 1e-3)
     walk_frac = np.clip(walk_frac / visible, 0.0, 1.0)
     bush_frac = np.clip(bush_frac / visible, 0.0, 1.0)
+    wall_frac = np.clip(wall_frac / visible, 0.0, 1.0)
 
-    unknown = known_frac < 0.25
-    occupancy = walk_frac < walkable_fraction
+    # --- three-way classification (see the module docstring) --------------- #
+    # BLOCKED needs positive wall evidence. The old rule was `walk_frac <
+    # threshold`, which turned every pixel the palette could not explain into a
+    # wall — and on real frames that is a large fraction of them.
+    hidden = known_frac < 0.25                      # behind the HUD
+    blocked = wall_frac >= wall_fraction
+    free = walk_frac >= walkable_fraction
+    # Bush is walkable ground whatever else is in the cell. Applied after the
+    # thresholds so it can override `blocked`, which is the point: a bush under
+    # the gas overlay reads as neither floor nor bush by hue, and used to leave
+    # the cell looking solid.
+    free |= bush_frac >= BUSH_WALKABLE_FRACTION
+    blocked &= ~free
+
+    # A cell the profile barely explained is evidence of nothing at all. Report
+    # it unknown so world_map declines to fuse it, instead of inventing either a
+    # wall or a floor from noise.
+    explained = np.clip(walk_frac + wall_frac, 0.0, 1.0)
+    unclear = (~free) & (~blocked) & (explained < MIN_CLASSIFIED_FRACTION)
+
+    # ...with one exception, and it is not a special case so much as the other
+    # half of the same idea. Unclassified ground that REACHES THE FRAME EDGE is
+    # not ground we failed to read — it is the out-of-play decoration past the
+    # map border, which genuinely is impassable. Unclassified ISLANDS, enclosed
+    # by terrain we did classify, are the real "no information" case.
+    #
+    # The two need telling apart because they want opposite answers, and the
+    # first one carries load elsewhere: `PathPlannerConfig.border_cost` infers
+    # "close to the map edge" from blocked ground nearby, with no map knowledge
+    # at all. Reporting off-map as merely unknown would leave the world map's
+    # optimistic prior saying the agent may walk off the arena, and would
+    # silently disarm the border penalty at the same time.
+    #
+    # HUD cells are excluded from the flood: an overlay is unreadable wherever
+    # it sits, and letting the fill run through it would drag the whole
+    # bottom-left corner in behind the joystick.
+    outside = _flood_from_border(unclear & ~hidden)
+    blocked = blocked | outside
+    unclear = unclear & ~outside
+
+    unknown = hidden | unclear
+    # A well-explained cell that tripped neither threshold (a block edge cutting
+    # across it) goes to whichever class actually dominates.
+    mixed = (~free) & (~blocked) & (~unknown)
+    blocked = blocked | (mixed & (wall_frac > walk_frac))
+
+    occupancy = blocked
     occupancy[unknown] = False   # not seeing a cell is not evidence of a wall
 
-    # Output-side sanity check — catches the case where a sticky profile is
-    # kept across a frame it no longer fits. See MAX_BLOCKED_FRACTION.
+    # Output-side sanity checks — both catch a sticky profile kept across a
+    # frame it no longer fits, from opposite directions. See the constants.
     if occupancy.mean() > MAX_BLOCKED_FRACTION:
+        return None
+    if unknown.mean() > MAX_UNKNOWN_FRACTION:
         return None
 
     cell = (w / gw, h / gh)
@@ -413,6 +558,8 @@ def find_terrain(image_bgr: np.ndarray, grid_size=(GRID_W, GRID_H),
         "occupancy": occupancy,
         "walkable": walk_frac,
         "bush": bush_frac,
+        "wall": wall_frac,
+        "off_map": outside,
         "unknown": unknown,
         "rect": (x, y, w, h),
         "cell": cell,
