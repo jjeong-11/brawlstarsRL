@@ -745,6 +745,15 @@ Last measured (96 paired seeds, Shelly, after the corner fix):
 | random headings | 7% | 35% | 5.11 |
 | old bot (legacy combat) | 4% | 25% | 5.84 |
 
+**Behaviour cloning from the brain does NOT work yet.** 81k demonstration
+samples (100 episodes) trained to 1.18 nats, but the cloned policy scored mean
+rank 5.71 against random's 4.72 on unseen seeds (83% killed by enemies): it
+copies "go engage" without the inputs the brain decides from -- enemy HP,
+tracked positions and the gas field are not in the 60-number observation -- and
+acts through latched commitments rather than per-tick goals. Widen the
+observation before relying on it. (`tools/behaviour_clone.py train` now always
+builds feed-forward PPO; it crashed whenever sb3-contrib was installed.)
+
 Per class (64 seeds, tactical vs random mean rank): Piper 5.05 vs 5.47, Bull
 3.00 vs 3.86, Barley 4.94 vs 5.77. Fight-threshold sweeps (160 seeds) were all
 within noise, so those defaults stand; long-range brawlers get a wider standoff.
@@ -771,7 +780,7 @@ for manual aimers, `rl/checkpoints.py` loader. Tests: `tests/test_tactics.py`,
 
 **Next steps**: tune
 `TacticsConfig` per brawler via `brawlers/profiles.py` `tactics_overrides`;
-BC-pretrain from the brain then PPO in `--sim`; verify `tiles_across_screen`
+add enemy HP / tracked threats / gas distance to the observation, then retry BC and PPO in `--sim`; verify `tiles_across_screen`
 on the device.
 
 ## What still needs building

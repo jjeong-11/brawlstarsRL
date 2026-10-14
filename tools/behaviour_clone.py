@@ -245,12 +245,13 @@ def train(data: str, out: str, epochs: int = 12, batch: int = 256,
             f"The dataset was extracted under a different --action-delay or a "
             f"different observation layout. Re-extract it.")
 
-    try:
-        from sb3_contrib import RecurrentPPO as Algo
-        policy_name = "MlpLstmPolicy"
-    except Exception:
-        from stable_baselines3 import PPO as Algo
-        policy_name = "MlpPolicy"
+    # Feed-forward PPO, always. The samples are shuffled single frames, which
+    # cannot train an LSTM -- and RecurrentPPO's get_distribution() needs LSTM
+    # state, so with sb3-contrib installed (it is in requirements.txt) this
+    # used to crash on the first batch. rl/train.py resumes a PPO checkpoint
+    # with PPO (see rl/checkpoints.py).
+    from stable_baselines3 import PPO as Algo
+    policy_name = "MlpPolicy"
     model = Algo(policy_name, venv, verbose=0)
 
     policy = model.policy
