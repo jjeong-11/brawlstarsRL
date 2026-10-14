@@ -111,7 +111,7 @@ class SendeventExecutor(ActionExecutor):
 
     def __init__(self, serial: Optional[str] = None, controls: Optional[Controls] = None,
                  flip_short: bool = False, flip_long: bool = True,
-                 device: Optional[str] = None):
+                 device: Optional[str] = None, persistent: bool = True):
         if shutil.which("adb") is None:
             raise RuntimeError("`adb` not found on PATH — connect your phone first.")
         self.controls = controls or Controls.from_screen(LAND_W, LAND_H)
@@ -135,6 +135,14 @@ class SendeventExecutor(ActionExecutor):
         self._next_id = 1
         self._move_down = False
         self._warned = False             # print a device error at most once
+        # Aimed presses are held for one tick and released at the start of
+        # the next (see _aimed_press). Slots waiting for that release:
+        self._pending_release = []
+        # Per-tick batching (see _emit). None = not batching, send at once.
+        self._batch = None
+        self._persistent = persistent
+        self._shell = None
+        self._checked = False            # first write goes one-shot, to see errors
 
     # -- coordinate transform: landscape display px -> raw digitizer --
     def to_raw(self, lx, ly):
@@ -147,23 +155,61 @@ class SendeventExecutor(ActionExecutor):
         return int(round(fs * self.abs_x_max)), int(round(fl * self.abs_y_max))
 
     # -- raw event plumbing --
+    #
+    # WHY BATCHED, AND WHY A PERSISTENT SHELL. Every `_emit` used to be its own
+    # `adb shell` subprocess: ~20-50ms of process spawn and USB round trip
+    # EACH, and a tick that moves, attacks and supers made five of them (a tap
+    # is a down AND an up). That is 100-250ms of blocking per tick on a loop
+    # whose budget is 100ms -- the act stage alone could not keep up, the
+    # same failure the README documents for `hold_ms`.
+    #
+    # Now `_execute` collects one tick's events and sends them as ONE line to
+    # a long-lived `adb shell` (the trick AdbExecutor already uses), so a
+    # tick costs one pipe write regardless of how many fingers move. The very
+    # first write still goes one-shot with stderr captured, because that is
+    # the only way to surface an SELinux/permission denial -- after that the
+    # device has accepted our writes and the pipe can be fire-and-forget.
     def _emit(self, lines):
-        # One-shot `adb shell 'ev; ev; ...'`. The kernel keeps a contact DOWN
-        # between separate invocations, so held movement still works. Surfaces
-        # the first device error (e.g. an SELinux/permission denial) so failures
-        # aren't silent.
+        if self._batch is not None:
+            self._batch.extend(lines)
+            return
+        self._send(lines)
+
+    def _send(self, lines):
+        if not lines:
+            return
+        cmd = "; ".join(lines)
+        if self._checked and self._persistent:
+            if self._shell is None or self._shell.poll() is not None:
+                self._open_shell()
+            if self._shell is not None:
+                try:
+                    self._shell.stdin.write(cmd + "\n")
+                    self._shell.stdin.flush()
+                    return
+                except Exception:
+                    self._shell = None
         try:
-            r = subprocess.run(self._base + ["shell", "; ".join(lines)],
+            r = subprocess.run(self._base + ["shell", cmd],
                                capture_output=True, text=True, timeout=5)
             err = (r.stderr or "").strip()
             if err and not self._warned:
                 print("[sendevent] device rejected the write:", err.splitlines()[0])
                 print("            -> raw touch is likely blocked on this phone.")
                 self._warned = True
+            self._checked = self._checked or not err
         except Exception as e:
             if not self._warned:
                 print("[sendevent] failed:", e)
                 self._warned = True
+
+    def _open_shell(self):
+        try:
+            self._shell = subprocess.Popen(
+                self._base + ["shell"], stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        except Exception:
+            self._shell = None
 
     def _ev(self, typ, code, val):
         return f"sendevent {self.device} {typ} {code} {val}"
@@ -206,22 +252,73 @@ class SendeventExecutor(ActionExecutor):
     # -- intent -> touches --
     def _execute(self, intent: Intent) -> None:
         c = self.controls
-        if intent.move != (0.0, 0.0):
-            cx, cy = c.move_center
-            tx = int(cx + intent.move[0] * c.move_radius)
-            ty = int(cy + intent.move[1] * c.move_radius)
-            if not self._move_down:
-                self._down(self.MOVE_SLOT, cx, cy)   # press at joystick center
-                self._move_down = True
-            self._move(self.MOVE_SLOT, tx, ty)        # hold + drag to direction
-        elif self._move_down:
-            self._up(self.MOVE_SLOT)
-            self._move_down = False
+        self._batch = []
+        try:
+            # Release last tick's aimed presses FIRST: lifting the finger is
+            # what fires an aimed shot, and the slot must be free before this
+            # tick can press it again.
+            for slot in self._pending_release:
+                self._up(slot)
+            self._pending_release = []
 
-        if intent.fire_attack:
-            self._tap(self.ATTACK_SLOT, *c.attack_btn)
-        if intent.fire_super:
-            self._tap(self.SUPER_SLOT, *c.super_btn)
+            if intent.move != (0.0, 0.0):
+                cx, cy = c.move_center
+                tx = int(cx + intent.move[0] * c.move_radius)
+                ty = int(cy + intent.move[1] * c.move_radius)
+                if not self._move_down:
+                    self._down(self.MOVE_SLOT, cx, cy)   # press at joystick center
+                    self._move_down = True
+                self._move(self.MOVE_SLOT, tx, ty)        # hold + drag to direction
+            elif self._move_down:
+                self._up(self.MOVE_SLOT)
+                self._move_down = False
+
+            # A plain tap is the game's auto-aim; an aim vector is a drag.
+            # Ignoring the aim here used to turn every manual-aim brawler (and
+            # every retargeted shot from rl/combat.py) back into auto-aim on
+            # this backend, silently.
+            if intent.fire_attack:
+                if getattr(intent, "aim", None) is None:
+                    self._tap(self.ATTACK_SLOT, *c.attack_btn)
+                else:
+                    self._aimed_press(self.ATTACK_SLOT, c.attack_btn,
+                                      intent.aim, getattr(intent, "aim_frac", 1.0))
+            if intent.fire_super:
+                if getattr(intent, "aim", None) is None:
+                    self._tap(self.SUPER_SLOT, *c.super_btn)
+                else:
+                    self._aimed_press(self.SUPER_SLOT, c.super_btn,
+                                      intent.aim, getattr(intent, "aim_frac", 1.0))
+        finally:
+            lines, self._batch = self._batch, None
+            self._send(lines)
+
+    def _aimed_press(self, slot, button, aim, frac: float) -> None:
+        """Press a fire button, drag out along `aim`, release NEXT tick.
+
+        The in-game gesture is press, drag to swing the aim indicator, lift to
+        fire. Sent as one burst, DOWN/MOVE/UP land within a millisecond of each
+        other and the game can read that as a tap -- an auto-aimed shot, the
+        silent mode switch `Controls.aim_min_radius` exists to prevent. Holding
+        the drag for one tick (the release is queued for the start of the next
+        `_execute`) gives the game whole frames with the aim indicator out,
+        with no sleeping anywhere in the loop.
+
+        Two MOVEs rather than one: a single jump straight to the end point is
+        the least drag-like thing a finger can do.
+        """
+        c = self.controls
+        bx, by = int(button[0]), int(button[1])
+        r = max(c.aim_min_radius, int(c.aim_radius * max(c.aim_min_frac,
+                                                         min(1.0, float(frac or 1.0)))))
+        tx = max(1, min(LAND_W - 2, int(bx + aim[0] * r)))
+        ty = max(1, min(LAND_H - 2, int(by + aim[1] * r)))
+        if slot in self._active:          # still held from a previous aim
+            self._up(slot)
+        self._down(slot, bx, by)
+        self._move(slot, (bx + tx) // 2, (by + ty) // 2)
+        self._move(slot, tx, ty)
+        self._pending_release.append(slot)
 
     # -- one-time orientation calibration --
     def calibrate(self):
@@ -242,10 +339,21 @@ class SendeventExecutor(ActionExecutor):
 
     def close(self):
         try:
+            for slot in self._pending_release:
+                self._up(slot)
+            self._pending_release = []
             if self._move_down:
                 self._up(self.MOVE_SLOT)
+                self._move_down = False
         except Exception:
             pass
+        if self._shell is not None:
+            try:
+                self._shell.stdin.close()
+                self._shell.terminate()
+            except Exception:
+                pass
+            self._shell = None
 
 
 def make_sendevent_env(serial: Optional[str] = None, controls: Optional[Controls] = None,

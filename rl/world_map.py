@@ -107,6 +107,14 @@ class WorldMapConfig:
     # Recentre once the screen window comes within this fraction of a map edge.
     recentre_margin: float = 0.18
 
+    # BUMPS: cells the agent physically could not walk into (see
+    # WaypointPlanner._bump). Physical evidence outranks a colour classifier,
+    # so a bump overrides the fused occupancy until it decays: per tick, so
+    # 0.985 halves it in ~4.6s at a 0.1s tick -- long enough to route round a
+    # wall perception missed, short enough that a false bump (a collision with
+    # another brawler, a lag spike) does not wall off a corridor for good.
+    bump_decay: float = 0.985
+
 
 class WorldMap:
     """Fused occupancy + gas over a window of the world, in grid cells.
@@ -136,6 +144,7 @@ class WorldMap:
         # extrapolates unseen gas outward from known gas -- so it would invent
         # a cloud over the entire map on every uncalibrated skin.
         self.seen_gas = np.zeros((self.gh, self.gw), np.float32)
+        self.bump = np.zeros((self.gh, self.gw), np.float32)
         # Map-cell coordinate of the play rect's top-left corner.
         self.origin = np.array([(self.gw - self.screen_gw) / 2.0,
                                 (self.gh - self.screen_gh) / 2.0], np.float64)
@@ -144,6 +153,23 @@ class WorldMap:
         self._clearance: Optional[np.ndarray] = None
         self._clearance_stamp = -1
         self._stamp = 0
+        # Derived masks (occupancy, out_of_bounds, unexplored, ...) cached per
+        # update. The planner, the tactical brain and the combat line test read
+        # them dozens of times a tick, and each read used to rebuild a full
+        # 144x81 array. Returned arrays are READ-ONLY so a caller that mutates
+        # one fails loudly instead of corrupting the cache.
+        self._derived = {}
+        self._derived_stamp = -1
+        self._has_bumps = False
+        # Total cells the arrays have been ROLLED by recentring, (x, y). Any
+        # coordinate stored in map cells OUTSIDE this object -- the planner's
+        # latched waypoint, the localiser's pose, a tracker -- must move by the
+        # same amount when this changes, or it silently jumps across the map.
+        # A running counter that a reset does NOT zero: consumers track it by
+        # difference, and a counter that jumped back to 0 would read as a roll.
+        if not hasattr(self, "shift"):
+            self.shift = [0, 0]
+        self.reference_pose = None
         self.have_terrain = False
         # Ground-truth layout from perception.localize, once the arena is
         # identified. None until then -- everything works without it.
@@ -205,9 +231,14 @@ class WorldMap:
         self.origin[1] -= camera_delta[1] / max(ch, 1e-6)
         self._recentre_if_needed()
 
-        # --- 2) age unobserved gas -------------------------------------- #
+        # --- 2) age unobserved gas, and bumps ---------------------------- #
         if self.config.gas_memory_decay < 1.0:
             self.gas *= self.config.gas_memory_decay
+        if self.config.bump_decay < 1.0 and self._has_bumps:
+            self.bump *= self.config.bump_decay
+            if float(self.bump.max()) < 0.5:
+                self.bump[:] = 0.0
+                self._has_bumps = False
 
         # --- 3) fuse this frame ----------------------------------------- #
         if terrain is not None:
@@ -216,6 +247,7 @@ class WorldMap:
             self._fuse_gas(np.asarray(gas_grid, dtype=np.float32))
 
         self._clearance = None      # invalidate the cached distance transform
+        self._derived = {}
 
     def _recentre_if_needed(self) -> None:
         """Roll the arrays so the screen window sits back near the middle.
@@ -241,7 +273,8 @@ class WorldMap:
             return
 
         rolling = [(self.occ_p, cfg.occ_prior), (self.bush, 0.0),
-                   (self.gas, 0.0), (self.seen, 0.0), (self.seen_gas, 0.0)]
+                   (self.gas, 0.0), (self.seen, 0.0), (self.seen_gas, 0.0),
+                   (self.bump, 0.0)]
         if self.reference_occ is not None:
             # The reference is registered to THIS array, so it has to move with
             # it. Newly exposed edges are filled BLOCKED rather than free: they
@@ -261,6 +294,8 @@ class WorldMap:
                 arr[sy:, :] = fill
         self.origin[0] += sx
         self.origin[1] += sy
+        self.shift[0] += sx
+        self.shift[1] += sy
 
     # ------------------------------------------------------------------ #
     def _window(self, gw: int, gh: int):
@@ -379,11 +414,45 @@ class WorldMap:
         self.reference_in_bounds = inside & np.where(
             inside, gm.in_bounds[np.clip(my, 0, rh - 1), np.clip(mx, 0, rw - 1)], False)
         self.have_reference = True
+        self.reference_pose = pose
+        self._reference_shift = (self.shift[0], self.shift[1])
+        self._invalidate()
+
+    def arena_center_cell(self):
+        """Centre of the identified arena in map cells, or None.
+
+        Showdown's gas closes concentrically on the middle of the arena, so
+        once the localiser has placed us this is the single most useful point
+        on the map: where the last safe ground will be.
+        """
+        pose = self.reference_pose
+        if not self.have_reference or pose is None:
+            return None
+        rh, rw = pose.game_map.occupancy.shape
+        # The pose was laid against the arrays as they were at the time; any
+        # roll since then moved the arrays under it.
+        sx0, sy0 = getattr(self, "_reference_shift", (0, 0))
+        return ((rw / 2.0 - pose.origin[0]) * pose.scale + (self.shift[0] - sx0),
+                (rh / 2.0 - pose.origin[1]) * pose.scale + (self.shift[1] - sy0))
 
     def clear_reference(self) -> None:
         self.reference_occ = None
         self.reference_in_bounds = None
         self.have_reference = False
+        self.reference_pose = None
+        self._invalidate()
+
+    def _invalidate(self) -> None:
+        self._derived = {}
+        self._clearance = None
+
+    def _cached(self, name, build):
+        arr = self._derived.get(name)
+        if arr is None:
+            arr = build()
+            arr.flags.writeable = False
+            self._derived[name] = arr
+        return arr
 
     @property
     def occupancy(self) -> np.ndarray:
@@ -392,23 +461,39 @@ class WorldMap:
         Observed cells come from fused observation; unobserved cells come from
         the reference layout when one is attached, and from the prior otherwise.
         """
-        occ = self.occ_p > self.config.occ_threshold
-        if self.have_reference and self.reference_occ is not None:
-            unseen = self.seen < 0.15
-            occ = np.where(unseen, self.reference_occ, occ)
-        return occ
+        def build():
+            occ = self.occ_p > self.config.occ_threshold
+            if self.have_reference and self.reference_occ is not None:
+                unseen = self.seen < 0.15
+                occ = np.where(unseen, self.reference_occ, occ)
+            if self._has_bumps:
+                occ = occ | (self.bump > 0.5)
+            return occ
+        return self._cached("occupancy", build)
+
+    def mark_bump(self, cell_xy) -> bool:
+        """Record that the agent could not walk into `cell_xy` (map cells)."""
+        gx, gy = int(np.floor(cell_xy[0])), int(np.floor(cell_xy[1]))
+        if not (0 <= gx < self.gw and 0 <= gy < self.gh):
+            return False
+        self.bump[gy, gx] = 1.0
+        self._has_bumps = True
+        self._invalidate()
+        return True
 
     @property
     def out_of_bounds(self) -> np.ndarray:
         """Cells outside the arena. All False without a reference map."""
-        if self.have_reference and self.reference_in_bounds is not None:
-            return ~self.reference_in_bounds
-        return np.zeros((self.gh, self.gw), bool)
+        def build():
+            if self.have_reference and self.reference_in_bounds is not None:
+                return ~self.reference_in_bounds
+            return np.zeros((self.gh, self.gw), bool)
+        return self._cached("out_of_bounds", build)
 
     @property
     def unexplored(self) -> np.ndarray:
         """Ground whose TERRAIN has never been classified."""
-        return self.seen < 0.15
+        return self._cached("unexplored", lambda: self.seen < 0.15)
 
     @property
     def gas_unobserved(self) -> np.ndarray:
@@ -418,7 +503,7 @@ class WorldMap:
         uncalibrated skin every cell is terrain-unexplored while most are
         gas-observed.
         """
-        return self.seen_gas < 0.15
+        return self._cached("gas_unobserved", lambda: self.seen_gas < 0.15)
 
     def clearance(self) -> np.ndarray:
         """Distance in cells from each free cell to the nearest obstacle.

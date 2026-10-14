@@ -255,6 +255,23 @@ class Localizer:
         self._interval = self.config.attempt_every
         self._area_at_last_attempt = 0
 
+    def shift(self, dx_cells: float, dy_cells: float) -> None:
+        """The caller's array was ROLLED by (dx, dy) live cells.
+
+        `pose.origin` is the map cell the caller's array (0, 0) sits on, so a
+        roll moves it by -(dx, dy)/scale. Without this, every recentre of the
+        world map (rl/world_map.py) put the predicted pose ~8 map cells off --
+        outside the tracking window -- and the lock decayed until it was
+        abandoned and had to be re-identified from scratch.
+        """
+        if self.pose is None or (dx_cells == 0 and dy_cells == 0):
+            return
+        p = self.pose
+        self.pose = Pose(game_map=p.game_map,
+                         origin=(p.origin[0] - dx_cells / p.scale,
+                                 p.origin[1] - dy_cells / p.scale),
+                         scale=p.scale, confidence=p.confidence, tracked=p.tracked)
+
     # ------------------------------------------------------------------ #
     @staticmethod
     def _explored_patch(occupancy, seen):

@@ -305,6 +305,8 @@ class LivePerception:
             "gas_safe": (0.0, 0.0),              # unit vector away from the gas
             "gas_frac": 0.0,
             "super_charge": 0.0,
+            "entities_fresh": False,
+            "pickups_fresh": False,
         }
         self._pending_state = None   # for game-state smoothing
         self._pending_anchor = None  # for anchor-jump confirmation
@@ -566,6 +568,13 @@ class LivePerception:
             c["enemies"] = ents["enemies"]
             c["boxes"] = ents["boxes"]
             timings["entities"] = time.time() - t0
+        # Between refreshes the cached enemy/box lists are re-served UNCHANGED,
+        # in the screen frame of the tick that produced them -- while the
+        # camera keeps scrolling. Anything that converts them to world
+        # coordinates (rl/enemy_tracker.py) must know which ticks carry a new
+        # reading, or a stale screen position plus a newer camera offset reads
+        # as the enemy sliding backwards at exactly the player's speed.
+        c["entities_fresh"] = bool(entities_due)
 
         if pickups_due:
             t0 = time.time()
@@ -577,6 +586,7 @@ class LivePerception:
             c["cubes"] = find_ground_cubes(frame, exclude_positions=exclude,
                                            hsv=hsv, bars=bars)
             timings["pickups"] = time.time() - t0
+        c["pickups_fresh"] = bool(pickups_due)
 
         if in_match and self._due("gas", now):
             t0 = time.time()

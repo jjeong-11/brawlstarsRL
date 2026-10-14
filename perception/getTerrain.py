@@ -546,13 +546,30 @@ def find_terrain(image_bgr: np.ndarray, grid_size=(GRID_W, GRID_H),
 
     cell = (w / gw, h / gh)
 
-    # The player's own sprite is not terrain, and a brawler standing on a cell
-    # is proof that cell is walkable. Free the 3x3 around it so A* can start.
+    # The player's own sprite is not terrain. A brawler standing on a cell is
+    # proof THAT cell is walkable -- but only that one. The other eight cells
+    # of the 3x3 are merely COVERED by the sprite.
+    #
+    # They used to be freed as well "so A* can start", and that was a real
+    # bug: a wall touching the player was reported free on every frame he
+    # stood beside it, the world map fused that as observed floor, and the
+    # gas escape picked exactly that sliver -- a third of a tile away, inside
+    # the wall -- as the nearest safe ground. In the simulator the agent then
+    # pushed into the wall until the cloud killed it. The neighbours are now
+    # UNKNOWN (not fused, so the map keeps what earlier frames saw there), and
+    # A* already frees a blocked start cell for itself (WaypointPlanner._astar).
     if player_pos is not None:
         gx = int((player_pos[0] - x) / max(cell[0], 1e-6))
         gy = int((player_pos[1] - y) / max(cell[1], 1e-6))
         if 0 <= gx < gw and 0 <= gy < gh:
-            occupancy[max(0, gy - 1):gy + 2, max(0, gx - 1):gx + 2] = False
+            nb = np.zeros_like(unknown)
+            nb[max(0, gy - 1):gy + 2, max(0, gx - 1):gx + 2] = True
+            nb &= ~outside                 # off-map stays blocked, never unknown
+            nb[gy, gx] = False
+            unknown = unknown | nb
+            occupancy[nb] = False
+            occupancy[gy, gx] = False
+            unknown[gy, gx] = False
 
     return {
         "occupancy": occupancy,

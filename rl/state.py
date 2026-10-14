@@ -16,8 +16,10 @@ Live dict (produced by perception/liveLoop.py) -> GameState field:
     live["ammo"]                        -> ammo_count
     live["anchor"] (x, y, r)            -> player_pos (x, y)
     live["enemies"][i]["center"]        -> enemy_positions
+    live["enemies"][i] health / cubes   -> enemies[i] (EntityObs: pos, hp, cubes)
     live["boxes"] / live["cubes"]       -> n_boxes / n_ground_cubes
     live["boxes"][i]["center"]          -> box_positions
+    live["boxes"][i] health             -> boxes[i] (EntityObs: pos, hp)
     live["cubes"][i]["center"]          -> ground_cube_positions
     live["in_gas"]                      -> in_gas
     live["game_state"]["brawlers_left"] -> players_left
@@ -34,6 +36,23 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 Point = Tuple[int, int]
+
+
+@dataclass(frozen=True)
+class EntityObs:
+    """One enemy or box as perception reported it this tick.
+
+    `enemy_positions` / `box_positions` are kept for every existing consumer,
+    but positions alone throw away the two numbers that decide a fight: how
+    much health the target has left, and how many power cubes it carries (each
+    cube is +10% health AND damage). Perception already reads both off the
+    floating bar above every entity; they used to be dropped right here, at the
+    seam, so nothing downstream could tell a 300 HP straggler from a 9-cube
+    tank. `rl/tactics.py` and `rl/combat.py` consume them.
+    """
+    pos: Point
+    hp: Optional[int] = None
+    cubes: Optional[int] = None
 
 
 @dataclass
@@ -64,6 +83,16 @@ class GameState:
     n_ground_cubes: int = 0
     box_positions: List[Point] = field(default_factory=list)
     ground_cube_positions: List[Point] = field(default_factory=list)
+    # Per-entity detail, parallel to enemy_positions / box_positions. May be
+    # empty when the state was built by hand from positions alone (tests,
+    # older callers) -- use enemy_list() / box_list(), which fall back.
+    enemies: List[EntityObs] = field(default_factory=list)
+    boxes: List[EntityObs] = field(default_factory=list)
+    # Whether the entity / pickup lists above are a NEW reading this tick or
+    # the perception cache re-serving an older one (see liveLoop). True by
+    # default so hand-built states and simulators count as fresh.
+    entities_fresh: bool = True
+    pickups_fresh: bool = True
     in_gas: bool = False
     gas_sides: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     gas_safe: Tuple[float, float] = (0.0, 0.0)
@@ -84,6 +113,17 @@ class GameState:
     # --- signals still needing a detector (safe defaults) ---
     super_charge: Optional[float] = None   # NEEDS EXTRACTOR (super ring 0..1)
     kills_this_tick: int = 0               # NEEDS EXTRACTOR (kill attribution)
+
+    def enemy_list(self) -> List[EntityObs]:
+        """Enemies with whatever detail is known, never shorter than positions."""
+        if len(self.enemies) == len(self.enemy_positions) and self.enemies:
+            return list(self.enemies)
+        return [EntityObs(pos=p) for p in self.enemy_positions]
+
+    def box_list(self) -> List[EntityObs]:
+        if len(self.boxes) == len(self.box_positions) and self.boxes:
+            return list(self.boxes)
+        return [EntityObs(pos=p) for p in self.box_positions]
 
     def nearest_enemy(self) -> Optional[Point]:
         if not self.enemy_positions or self.player_pos is None:
@@ -125,6 +165,8 @@ def adapt_live_state(live: dict, tick: int = 0,
 
     enemy_positions = _centers(live.get("enemies"))
     box_positions = _centers(live.get("boxes"))
+    enemies = _entities(live.get("enemies"))
+    boxes = _entities(live.get("boxes"))
     ground_cube_positions = _centers(live.get("cubes"))
 
     # super charge comes from perception (getSuper via liveLoop); an explicit
@@ -145,6 +187,10 @@ def adapt_live_state(live: dict, tick: int = 0,
         n_ground_cubes=len(live.get("cubes") or []),
         box_positions=box_positions,
         ground_cube_positions=ground_cube_positions,
+        enemies=enemies,
+        boxes=boxes,
+        entities_fresh=bool(live.get("entities_fresh", True)),
+        pickups_fresh=bool(live.get("pickups_fresh", True)),
         in_gas=bool(live.get("in_gas")),
         gas_sides=tuple(live.get("gas_sides") or (0.0, 0.0, 0.0, 0.0)),
         gas_safe=tuple(live.get("gas_safe") or (0.0, 0.0)),
@@ -157,6 +203,28 @@ def adapt_live_state(live: dict, tick: int = 0,
         kills_this_tick=kills_this_tick,
         frame_size=frame_size or (1280, 720),
     )
+
+
+def _entities(items) -> List[EntityObs]:
+    """live["enemies"] / live["boxes"] -> EntityObs, skipping malformed rows.
+
+    Same filter as the position list (`center` present), so the two stay
+    index-aligned -- `enemy_list()` relies on that.
+    """
+    out: List[EntityObs] = []
+    for it in items or []:
+        if isinstance(it, dict):
+            c = it.get("center")
+            if c is None:
+                continue
+            hp = (it.get("health") or {}).get("current_health")
+            cubes = (it.get("cubes") or {}).get("cube_count")
+            out.append(EntityObs(pos=(int(c[0]), int(c[1])),
+                                 hp=int(hp) if hp is not None else None,
+                                 cubes=int(cubes) if cubes is not None else None))
+        elif it is not None:
+            out.append(EntityObs(pos=(int(it[0]), int(it[1]))))
+    return out
 
 
 # The explicit gap list, surfaced in the README and asserted in tests.

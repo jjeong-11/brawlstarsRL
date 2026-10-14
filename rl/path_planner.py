@@ -236,6 +236,14 @@ class PathPlannerConfig:
     stuck_ticks: int = 5              # consecutive barely-moving decisions
     stuck_speed: float = 0.015        # movement below this fraction of the
                                       # short side per tick counts as "stuck"
+    # BUMP SENSOR. Pushing the stick one way for this many ticks without the
+    # player moving is physical proof of an obstacle perception missed (a
+    # misclassified wall, a box, the player's own sprite hiding a wall face).
+    # The cell ahead is marked in the world map's decaying bump layer and A*
+    # routes round it. 4 ticks clears the 1-2 tick action latency, so starting
+    # to walk is never mistaken for a wall. 0 disables.
+    bump_ticks: int = 4
+    bump_reach_cells: float = 1.6
 
     # --- direct-steering fallback (no map at all) ---
     candidate_headings: int = 24
@@ -297,6 +305,14 @@ class WaypointPlanner:
         self._last_player_cell: Optional[Tuple[float, float]] = None
         self._smoothed_move: Tuple[float, float] = (0.0, 0.0)
         self._last_status = PlannerStatus()
+        self._push_for = 0
+        self._push_dir = (0.0, 0.0)
+        self.bumps = 0
+        self._seen_shift = (self.world.shift[0], self.world.shift[1])
+        # plan_goal(): the brain's requested destination (pixels at latch
+        # time, kept in map cells) that the current waypoint was relocated
+        # from -- so a goal that has not really moved is not re-relocated.
+        self._goal_cell: Optional[Tuple[float, float]] = None
 
     def status(self) -> PlannerStatus:
         return self._last_status
@@ -373,6 +389,7 @@ class WaypointPlanner:
         if terrain is not None and terrain.get("gas") is not None:
             gas = terrain["gas"]
         self.world.update(terrain, gas, camera_delta)
+        self._sync_shift()
         self._localize(camera_delta)
 
         player = getattr(state, "player_pos", None) if state is not None else None
@@ -398,6 +415,8 @@ class WaypointPlanner:
         # to subtract the camera delta by hand -- and it is correct even on
         # ticks where the camera estimate failed.
         stuck = self._update_stuck(px, py, short, use_map)
+        if self._bump(use_map):
+            self.blocked = True           # the current route ran into it
 
         # --- decide whether the current commitment is over ---------------- #
         in_gas = bool(getattr(state, "in_gas", False))
@@ -483,6 +502,162 @@ class WaypointPlanner:
         return move
 
     # ------------------------------------------------------------------ #
+    def plan_goal(self, goal_px, state, frame_size, terrain=None,
+                  camera_delta=(0.0, 0.0), gas_grid=None, avoid=None,
+                  precise: bool = False, relatch_cells: float = 1.5,
+                  label: str = "goal", pull_in: Optional[bool] = None
+                  ) -> Tuple[float, float]:
+        """Route to an ABSOLUTE destination chosen by a scripted brain.
+
+        `plan()` takes the policy's (heading, distance) and LATCHES it, ignoring
+        new choices until the commitment ends -- the temporal abstraction a
+        learning policy needs. A scripted brain (rl/tactics.py) has the
+        opposite need: it re-decides every tick from the full picture and must
+        be able to follow a strafing standoff point or a fleeing target
+        without waiting out a commitment. This runs the SAME machinery --
+        world map fusion, destination relocation, clearance-aware A*, gas
+        escape, steering low-pass -- with the destination supplied directly.
+
+        goal_px : frame pixels, or None to hold position (gas still overrides).
+        avoid   : positions A* should route around (threats); the target being
+                  engaged is deliberately NOT in it.
+        precise : walk onto the exact point (a ground cube) instead of stopping
+                  within `arrive_frac` of it, and skip the openness pull-back
+                  that would move a box-side or bush goal toward open ground.
+        """
+        cfg = self.config
+        w, h = frame_size
+        rect = terrain["rect"] if terrain else (self.world.rect or (0, 0, w, h))
+        short = min(rect[2], rect[3])
+
+        gas = gas_grid
+        if terrain is not None and terrain.get("gas") is not None:
+            gas = terrain["gas"]
+        self.world.update(terrain, gas, camera_delta)
+        self._sync_shift()
+        self._localize(camera_delta)
+
+        player = getattr(state, "player_pos", None) if state is not None else None
+        in_gas = bool(getattr(state, "in_gas", False))
+        if player is None:
+            # No anchor. The camera keeps the player near the middle of the
+            # frame, so steering from the frame centre is the best estimate.
+            self.waypoint_cell = None
+            self._goal_cell = None
+            self.path, self.path_pixels = [], []
+            self._last_status = PlannerStatus(active=False, mode="lost")
+            if goal_px is None:
+                return self._smooth((0.0, 0.0))
+            return self._smooth(_unit(goal_px[0] - w / 2.0, goal_px[1] - h / 2.0))
+
+        px, py = float(player[0]), float(player[1])
+        use_map = self.world.ready()
+        stuck = self._update_stuck(px, py, short, use_map)
+        if self._bump(use_map):
+            self.blocked = True
+        avoid = list(avoid or ())
+
+        move = (0.0, 0.0)
+        mode = "hold"
+        relatch = False
+        arrived = False
+        if goal_px is None:
+            self.waypoint_cell = None
+            self._goal_cell = None
+            self.path = []
+            self.blocked = False
+        elif not use_map:
+            move = self._steer_direct((px, py), goal_px, state, rect, short)
+            self.path = []
+            mode = "direct"
+        else:
+            gcell = self.world.to_cell(goal_px)
+            moved = (self._goal_cell is None or
+                     hypot(gcell[0] - self._goal_cell[0],
+                           gcell[1] - self._goal_cell[1]) > relatch_cells)
+            if self.waypoint_cell is None or moved or self.blocked or stuck:
+                relatch = True
+                self._goal_cell = gcell
+                self.waypoint_cell = self._relocate_cell(
+                    goal_px, (px, py),
+                    pull_in=(not precise) if pull_in is None else bool(pull_in))
+                self.blocked = False
+                if stuck:
+                    self._stuck_for = 0
+            wp = self.world.to_pixels(self.waypoint_cell)
+            dist = hypot(wp[0] - px, wp[1] - py)
+            arrived = dist < cfg.arrive_frac * short
+            if arrived and precise:
+                # Walk straight onto it: pickups are collected on contact,
+                # and "close enough" is a few hundred HP of cube short.
+                move = _unit(goal_px[0] - px, goal_px[1] - py)
+                self.path = [self.world.clamp_cell(self.world.to_cell((px, py))),
+                             self.world.clamp_cell(self.waypoint_cell)]
+                mode = "astar"
+            elif arrived:
+                move = (0.0, 0.0)
+                self.path = []
+                mode = "arrived"
+            else:
+                move, self.path, self.blocked = self._astar_step(
+                    (px, py), self.waypoint_cell, avoid, short)
+                mode = "astar"
+
+        escaping = False
+        if in_gas:
+            escape = self._escape_gas((px, py)) if use_map else None
+            if escape is None:
+                sx, sy = getattr(state, "gas_safe", (0.0, 0.0))
+                if (sx, sy) != (0.0, 0.0):
+                    move, escaping = _unit(sx, sy), True
+            else:
+                move, self.path = escape
+                escaping, mode = True, "escape"
+
+        self.path_pixels = [self.world.to_pixels(c) for c in self.path] if use_map else []
+        move = self._smooth(move)
+        self.ticks_left = 1 if self.waypoint_cell is not None else 0
+        self.tier = 0
+        wp = self.waypoint_pixels() or (px, py)
+        self._last_status = PlannerStatus(
+            active=self.waypoint_cell is not None and use_map,
+            progress=1.0 if arrived else 0.0,
+            waypoint_dx=(wp[0] - px) / max(w, 1),
+            waypoint_dy=(wp[1] - py) / max(h, 1),
+            distance=float(min(1.0, hypot(wp[0] - px, wp[1] - py) / max(short, 1))),
+            blocked=self.blocked, replanned=relatch, escaping_gas=escaping,
+            mode=mode)
+        return move
+
+    def _sync_shift(self) -> None:
+        """Follow a world-map recentre with everything stored in map cells.
+
+        `WorldMap._recentre_if_needed` rolls its arrays by ~20 cells a few
+        times a match. Its own origin moves with them, but the latched waypoint
+        here, the last-position used for stuck detection and the localiser's
+        pose are all ALSO in map cells, and used to be left behind: the
+        waypoint jumped half a screen and the agent spent the rest of the
+        commitment walking somewhere it never chose.
+        """
+        sx, sy = self.world.shift
+        dx, dy = sx - self._seen_shift[0], sy - self._seen_shift[1]
+        if dx == 0 and dy == 0:
+            return
+        self._seen_shift = (sx, sy)
+        if self.waypoint_cell is not None:
+            self.waypoint_cell = (self.waypoint_cell[0] + dx, self.waypoint_cell[1] + dy)
+        if self._goal_cell is not None:
+            self._goal_cell = (self._goal_cell[0] + dx, self._goal_cell[1] + dy)
+        if self._last_player_cell is not None:
+            self._last_player_cell = (self._last_player_cell[0] + dx,
+                                      self._last_player_cell[1] + dy)
+        self.path = [(c[0] + dx, c[1] + dy) for c in self.path]
+        if self.localizer is not None:
+            try:
+                self.localizer.shift(dx, dy)
+            except Exception:
+                pass
+
     def _localize(self, camera_delta) -> None:
         """Try to identify the arena, and adopt its layout once we have.
 
@@ -537,6 +712,39 @@ class WaypointPlanner:
         self._last_player_cell = cur
         return self._stuck_for >= cfg.stuck_ticks
 
+    def _bump(self, use_map: bool) -> bool:
+        """Mark the cell ahead as an obstacle if we keep pushing into it.
+
+        Uses the joystick vector actually sent on the previous ticks (the
+        smoothed move) and the per-tick displacement `_update_stuck` measured.
+        Returns True when a bump was recorded this tick.
+        """
+        cfg = self.config
+        if not use_map or cfg.bump_ticks <= 0 or self._last_player_cell is None:
+            self._push_for = 0
+            return False
+        mx, my = self._smoothed_move
+        if (mx, my) == (0.0, 0.0) or self._stuck_for == 0:
+            self._push_for = 0
+            self._push_dir = (0.0, 0.0)
+            return False
+        # Only a CONSISTENT push counts: strafing back and forth also moves
+        # little per tick, and is not evidence of a wall.
+        pdx, pdy = self._push_dir
+        if self._push_for and (pdx * mx + pdy * my) < 0.7:
+            self._push_for = 0
+        self._push_dir = (mx, my)
+        self._push_for += 1
+        if self._push_for < cfg.bump_ticks:
+            return False
+        cx, cy = self._last_player_cell
+        ok = self.world.mark_bump((cx + 0.5 + mx * cfg.bump_reach_cells,
+                                   cy + 0.5 + my * cfg.bump_reach_cells))
+        self._push_for = 0
+        if ok:
+            self.bumps += 1
+        return ok
+
     def _publish_status(self, px, py, w, h, short, relatch, escaping, mode, use_map) -> None:
         wp = self.waypoint_pixels()
         if wp is None:
@@ -556,7 +764,7 @@ class WaypointPlanner:
         )
 
     # ------------------------------------------------------------------ #
-    def _relocate_cell(self, target_px, player_px) -> Tuple[float, float]:
+    def _relocate_cell(self, target_px, player_px, pull_in: bool = True) -> Tuple[float, float]:
         """Make a destination legal, and never park it on the map border.
 
         Three corrections, in order:
@@ -587,8 +795,8 @@ class WaypointPlanner:
         standable = (~occ) & (~gassy) & (clear >= cfg.agent_radius_cells)
 
         # (1) walk back toward the player until the ground is open enough
-        if cfg.min_destination_openness > 0 and world.has_walls():
-            open_frac = _openness(occ, cfg.openness_radius, world.seen > 0.15)
+        if pull_in and cfg.min_destination_openness > 0 and world.has_walls():
+            open_frac = self._openness_field()
             best, best_open = target, -1.0
             for frac in (1.0, 0.8, 0.62, 0.48, 0.36, 0.26, 0.18):
                 cx = px + (target[0] - px) * frac
@@ -645,17 +853,34 @@ class WaypointPlanner:
         """
         cfg = self.config
         world = self.world
-        near = _dilate_grid(world.gas, cfg.gas_dilate_cells)
-        if cfg.gas_unknown_dilate_cells > cfg.gas_dilate_cells:
-            far = _dilate_grid(world.gas, cfg.gas_unknown_dilate_cells)
-            # Only into ground the GAS DETECTOR has never covered. Keying this
-            # off terrain exploration instead would smear an imaginary cloud
-            # across the whole map on any skin without a colour profile, where
-            # terrain is unreadable but gas is read perfectly well.
-            near = np.where(world.gas_unobserved, np.maximum(near, far), near)
-        if cfg.gas_close_cells > 0:
-            near = np.maximum(near, _close_grid(near, cfg.gas_close_cells))
-        return near.astype(np.float32)
+
+        def build():
+            near = _dilate_grid(world.gas, cfg.gas_dilate_cells)
+            if cfg.gas_unknown_dilate_cells > cfg.gas_dilate_cells:
+                far = _dilate_grid(world.gas, cfg.gas_unknown_dilate_cells)
+                # Only into ground the GAS DETECTOR has never covered. Keying
+                # this off terrain exploration instead would smear an imaginary
+                # cloud across the whole map on any skin without a colour
+                # profile, where terrain is unreadable but gas is read fine.
+                near = np.where(world.gas_unobserved, np.maximum(near, far), near)
+            if cfg.gas_close_cells > 0:
+                near = np.maximum(near, _close_grid(near, cfg.gas_close_cells))
+            return np.ascontiguousarray(near, dtype=np.float32)
+
+        # Cached with the map's other derived layers: it is read by both A*
+        # passes, the gas escape and the tactical brain on the same tick.
+        cached = getattr(world, "_cached", None)
+        return cached("planner_gas_field", build) if cached else build()
+
+    def _openness_field(self) -> np.ndarray:
+        """`_openness` over the fused map, cached with the map's derived layers
+        (destination relocation and both A* passes all ask on the same tick)."""
+        cfg = self.config
+        world = self.world
+        build = lambda: _openness(world.occupancy, cfg.openness_radius,
+                                  world.seen > 0.15)
+        cached = getattr(world, "_cached", None)
+        return cached(f"openness_{cfg.openness_radius}", build) if cached else build()
 
     def _cost_grid(self, enemies, short, inflate: bool = True) -> np.ndarray:
         """Per-cell multiplier over the WHOLE world map.
@@ -684,7 +909,7 @@ class WaypointPlanner:
 
         # Push routes away from the map edge (see PathPlannerConfig.border_cost).
         if cfg.border_cost > 0 and world.has_walls():
-            open_frac = _openness(occ, cfg.openness_radius, world.seen > 0.15)
+            open_frac = self._openness_field()
             cost += cfg.border_cost * (1.0 - open_frac) ** 2
 
         if enemies and cfg.enemy_cost > 0:
@@ -873,40 +1098,66 @@ class WaypointPlanner:
                                              0.0, 1.0) ** 2
         cost[occ] = np.inf
 
-        safe = (gas < cfg.gas_safe_threshold) & (~occ)
+        # WHERE TO STOP. The first gas-free cell is not safe ground: it is the
+        # cloud's edge, which advances, and it is often a sliver against a
+        # wall the agent's body cannot reach (measured in sim/: the agent stood
+        # in the gas pushing at a cell a third of a tile away, inside a wall,
+        # until it died). So prefer DEEP safety -- clear under the dilated
+        # field the A* uses, with room for the agent's footprint -- and fall
+        # back to the first merely gas-free cell only when nothing deeper is
+        # reachable (an endgame zone smaller than the dilation).
+        free = ~occ
+        safe = (gas < cfg.gas_safe_threshold) & free
         if not safe.any():
             return None
+        # Deep safety must be OBSERVED safety: never-looked-at ground reads
+        # gas-free only because nobody has looked, and a target there drags
+        # the escape the long way through the cloud toward a guess.
+        deep = (self._gas_field() < cfg.gas_safe_threshold) & free & (
+            clear >= cfg.agent_radius_cells) & ~world.gas_unobserved
 
+        gw_ = gw
+        flat = cost.ravel().tolist()
+        safe_f = safe.ravel().tolist()
+        deep_f = deep.ravel().tolist()
+        inf = float("inf")
         came = {}
         g = {start: 0.0}
         heap = [(0.0, start)]
         seen = set()
-        limit = float(cfg.gas_escape_radius)
+        limit2 = float(cfg.gas_escape_radius) ** 2
         goal = None
+        fallback = None
         while heap:
             gc, node = heapq.heappop(heap)
             if node in seen:
                 continue
             seen.add(node)
-            if safe[node[1], node[0]] and node != start:
-                goal = node
-                break
             nx0, ny0 = node
-            if hypot(nx0 - start[0], ny0 - start[1]) > limit:
+            idx = ny0 * gw_ + nx0
+            if node != start:
+                if deep_f[idx]:
+                    goal = node
+                    break
+                if fallback is None and safe_f[idx]:
+                    fallback = node
+            if (nx0 - start[0]) ** 2 + (ny0 - start[1]) ** 2 > limit2:
                 continue
             for dx, dy, step in _NEIGHBOURS:
                 nx, ny = nx0 + dx, ny0 + dy
-                if not (0 <= nx < gw and 0 <= ny < gh):
+                if not (0 <= nx < gw_ and 0 <= ny < gh):
                     continue
-                c = cost[ny, nx]
-                if not np.isfinite(c):
+                c = flat[ny * gw_ + nx]
+                if c >= inf:
                     continue
-                ng = gc + step * float(c)
+                ng = gc + step * c
                 nb = (nx, ny)
-                if ng < g.get(nb, float("inf")):
+                if ng < g.get(nb, inf):
                     g[nb] = ng
                     came[nb] = node
                     heapq.heappush(heap, (ng, nb))
+        if goal is None:
+            goal = fallback
 
         if goal is None:
             return None

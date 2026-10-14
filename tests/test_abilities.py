@@ -118,19 +118,49 @@ def _state(dist_frac, w=1280, h=720):
                      enemy_positions=[(w // 2 + int(dist_frac * min(w, h)), h // 2)])
 
 
-def test_gate_can_only_tighten_the_global_ceiling():
-    """THE safety property. `tiles_across_screen` is an unverified estimate;
-    this is what makes shipping it anyway defensible."""
-    cfg = CombatConfig()
+def test_ceiling_mode_can_only_tighten_the_global_ceiling():
+    """With `range_gate_is_ceiling` on, the per-brawler range may only tighten
+    `max_range_frac`. Kept as an opt-in safety mode for an uncalibrated
+    `tiles_across_screen`; it is no longer the default (see the next test)."""
+    cfg = CombatConfig(range_gate_is_ceiling=True)
     book = default_abilities()
     for a in book.all():
         got = CombatPolicy(cfg, ability=a).range_frac()
         assert got <= cfg.max_range_frac + 1e-9, f"{a.id} loosened the gate"
-    worst = max(book.all(), key=lambda a: CombatPolicy(cfg, ability=a).range_frac())
-    best = min(book.all(), key=lambda a: CombatPolicy(cfg, ability=a).range_frac())
-    print(f"gate spans {CombatPolicy(cfg, ability=best).range_frac():.3f} "
-          f"({best.id}) .. {CombatPolicy(cfg, ability=worst).range_frac():.3f} "
-          f"({worst.id}); global ceiling {cfg.max_range_frac}")
+
+
+def test_gate_matches_the_published_range_in_pixels():
+    """The regression this replaced: the old gate returned tiles/tiles_across,
+    a fraction of the play WIDTH, and compared it against distance over the
+    SHORT side -- understating every range by the aspect ratio -- and then
+    capped everyone at 0.42 of the short side. On a 2424x1080 phone that was
+    ~3.2 tiles for EVERY brawler: Piper (10 tiles) only fired at point blank."""
+    cfg = CombatConfig()
+    book = default_abilities()
+    w, h = 2424, 1080
+    px_per_tile = w / cfg.tiles_across_screen
+    for bid in ("piper", "colt", "shelly", "edgar"):
+        a = book.get(bid)
+        got_tiles = CombatPolicy(cfg, ability=a).range_px((w, h)) / px_per_tile
+        want = a.gate_range_tiles * cfg.range_safety
+        assert abs(got_tiles - want) < 1e-6, (bid, got_tiles, want)
+    piper = CombatPolicy(cfg, ability=book.get("piper")).range_px((w, h)) / px_per_tile
+    edgar = CombatPolicy(cfg, ability=book.get("edgar")).range_px((w, h)) / px_per_tile
+    assert piper > 2.5 * edgar, "long range must reach far past short range"
+    print(f"piper {piper:.1f} tiles, edgar {edgar:.1f} tiles "
+          f"(old gate: 3.2 tiles for both)")
+
+
+def test_measured_scale_overrides_the_estimate_and_rejects_nonsense():
+    a = default_abilities().get("colt")
+    cp = CombatPolicy(CombatConfig(), ability=a)
+    base = cp.range_px((2424, 1080))
+    cp.calibrate(20.0)                     # camera shows more tiles -> fewer px each
+    assert cp.range_px((2424, 1080)) < base
+    cp.calibrate(500.0)                    # a units slip: ignored
+    assert cp.range_px((2424, 1080)) < base
+    cp.calibrate(None)
+    assert abs(cp.range_px((2424, 1080)) - base) < 1e-6
 
 
 def test_short_range_brawler_stops_firing_into_space():
@@ -192,6 +222,7 @@ def test_thrower_scales_the_drag_with_distance():
     thrower aimed at full deflection always overshoots a close target."""
     cp = CombatPolicy(CombatConfig(), ability=default_abilities().get("barley"))
     near = cp.decide(_state(0.10), frame_size=(1280, 720))
+    cp.reset()      # two independent shots; the fire-rate limit is tested elsewhere
     far = cp.decide(_state(0.38), frame_size=(1280, 720))
     assert near.attack and far.attack
     assert near.aim_frac < far.aim_frac
@@ -202,7 +233,7 @@ def test_no_aim_vector_when_nothing_fires():
     """An aim attached to a decision that fires nothing is a value nobody reads
     and everybody has to reason about."""
     cp = CombatPolicy(CombatConfig(), ability=default_abilities().get("piper"))
-    d = cp.decide(_state(0.9), frame_size=(1280, 720))
+    d = cp.decide(_state(1.6), frame_size=(1280, 720))   # ~15 tiles: past Piper's 10
     assert not d.attack and d.aim is None
 
 
