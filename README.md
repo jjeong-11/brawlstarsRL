@@ -736,9 +736,18 @@ python scripts/train_rl.py --sim --brawler piper                                
 python -m sim.gym_env collect --episodes 200 --out bc_sim.npz                     # BC from the brain
 ```
 
-Last measured (96 paired seeds, Shelly, before the final corner-cutting fix):
-tactical 20% wins / 45% top-3 / mean rank 4.38; shipped policy 7% / 43% / 4.74;
-random headings 5% / 39% / 4.76; the old bot (legacy) 2% / 31% / 5.55.
+Last measured (96 paired seeds, Shelly, after the corner fix):
+
+| controller | wins | top 3 | mean rank |
+|---|---|---|---|
+| tactical brain | 16% | 46% | 4.42 |
+| shipped `brawlstars_move.zip` | 2% | 41% | 4.89 |
+| random headings | 7% | 35% | 5.11 |
+| old bot (legacy combat) | 4% | 25% | 5.84 |
+
+Per class (64 seeds, tactical vs random mean rank): Piper 5.05 vs 5.47, Bull
+3.00 vs 3.86, Barley 4.94 vs 5.77. Fight-threshold sweeps (160 seeds) were all
+within noise, so those defaults stand; long-range brawlers get a wider standoff.
 Treat differences, not absolute numbers, as the signal.
 
 **Bugs fixed along the way**
@@ -760,7 +769,7 @@ Also added: bump sensor, deep-safety gas escape, fire-rate limit, partial lead
 for manual aimers, `rl/checkpoints.py` loader. Tests: `tests/test_tactics.py`,
 `tests/test_perf.py`.
 
-**Next steps**: re-run `sim.evaluate` after the corner fix; tune
+**Next steps**: tune
 `TacticsConfig` per brawler via `brawlers/profiles.py` `tactics_overrides`;
 BC-pretrain from the brain then PPO in `--sim`; verify `tiles_across_screen`
 on the device.
