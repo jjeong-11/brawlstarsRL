@@ -97,10 +97,20 @@ class SessionConfig:
     sendevent_orientation: str = "A"
     save_traces: bool = False             # also write debugOutput/trace/
     deterministic: bool = False           # policy.predict(deterministic=...)
+    # Who decides where to move:
+    #   "tactical" rl/tactics.py, the scripted Showdown strategy
+    #   "policy"   the learned (heading, distance) net (random if none loads)
+    #   "auto"     tactical, unless THIS brawler has its own trained weights --
+    #              the shared base policy is not trained, and measured in
+    #              sim/evaluate.py the brain beats random headings by a wide
+    #              margin, so it is the better default until a policy beats it.
+    brain: str = "auto"
 
     def validate(self) -> None:
         if self.mode not in ("observe", "control"):
             raise ValueError(f"mode must be observe or control, got {self.mode!r}")
+        if self.brain not in ("auto", "tactical", "policy"):
+            raise ValueError(f"brain must be auto, tactical or policy, got {self.brain!r}")
         if self.source == "video" and not self.video_path:
             raise ValueError("source=video needs video_path")
         if self.fps <= 0:
@@ -240,9 +250,12 @@ class SessionRunner:
             from perception.getTerrain import (GRID_H, GRID_W, ProfileSelector,
                                                find_terrain, play_rect)
             from perception.liveLoop import LivePerception
-            from rl.actions import decode_action
+            from rl.actions import decode_action, decode_goal
             from rl.camera_tracker import CameraTracker
             from rl.combat import CombatConfig, CombatPolicy
+            from rl.checkpoints import PolicyStepper
+            from rl.enemy_tracker import EnemyTracker
+            from rl.tactics import TacticalBrain, TacticsConfig
             from rl.debug_trace import DecisionTracer, TraceConfig
             from rl.env import encode_observation
             from rl.kills import KillAttributor
@@ -264,8 +277,11 @@ class SessionRunner:
             # --- per-brawler priors (all empty today; see brawlers/profiles.py)
             prof = profile_for(cfg.brawler)
             reward_cfg = apply_overrides(RewardConfig(), prof.reward_overrides)
-            combat_cfg = apply_overrides(CombatConfig(), prof.combat_overrides)
+            combat_cfg = apply_overrides(CombatConfig(tick_seconds=1.0 / cfg.fps),
+                                         prof.combat_overrides)
             planner_cfg = apply_overrides(PathPlannerConfig(), prof.planner_overrides)
+            tactics_cfg = apply_overrides(TacticsConfig(tick_seconds=1.0 / cfg.fps),
+                                          getattr(prof, "tactics_overrides", {}) or {})
             if not prof.is_default:
                 self._say(f"applied {cfg.brawler} profile overrides")
 
@@ -287,6 +303,15 @@ class SessionRunner:
             policy, slot = self.registry.load_policy(cfg.brawler)
             self._publish(model=slot.to_dict())
             self._say(slot.label)
+            use_brain = (cfg.brain == "tactical" or
+                         (cfg.brain == "auto" and not slot.is_brawler_specific))
+            if use_brain:
+                self._say("movement: tactical brain (rl/tactics.py)"
+                          + (" — auto: no brawler-specific weights"
+                             if cfg.brain == "auto" else ""))
+            else:
+                self._say("movement: learned policy" +
+                          ("" if policy is not None else " — none loaded, random headings"))
 
             # --- frame source --------------------------------------------- #
             source = self._build_source(cfg)
@@ -322,9 +347,17 @@ class SessionRunner:
                 rc.reset()
                 ka = KillAttributor()
                 ka.reset()
+                br = (TacticalBrain(tactics_cfg, ability=ability, combat=cb)
+                      if use_brain else None)
+                # Carries the LSTM state between ticks for a recurrent policy
+                # (a fresh state every tick is a policy with no memory).
+                stepper = (PolicyStepper(policy, deterministic=cfg.deterministic)
+                           if policy is not None else None)
                 return types.SimpleNamespace(
                     perception=LivePerception(), calc=rc, killer=ka,
-                    planner=p, camera=c, profiles=pr, combat=cb)
+                    planner=p, camera=c, profiles=pr, combat=cb,
+                    tracker=EnemyTracker(), brain=br, stepper=stepper,
+                    prev_raw=None)
 
             m = new_match()
 
@@ -365,7 +398,8 @@ class SessionRunner:
 
                 live, _ = m.perception.tick(frame)
                 kills = m.killer.update(live)
-                state = adapt_live_state(live, tick=tick, kills_this_tick=kills)
+                state = adapt_live_state(live, tick=tick, kills_this_tick=kills,
+                                         frame_size=(frame.shape[1], frame.shape[0]))
                 result = m.calc.compute(state)
                 tick += 1
 
@@ -411,7 +445,14 @@ class SessionRunner:
                         was_in_match = True
                         continue
                     was_in_match = True
-                elif not in_match:
+                elif screen in ("loading", "match_end", "defeated"):
+                    # Only a DEFINITE out-of-match screen arms the edge. A fresh
+                    # LivePerception (which every new_match() builds) reports
+                    # "unknown" until its game-state smoothing confirms twice;
+                    # treating that as "left the match" made the next confirmed
+                    # in_match read as ANOTHER new match, so the world map,
+                    # planner and tracker were wiped every 1-2 seconds for the
+                    # whole session.
                     was_in_match = False
 
                 fh, fw = frame.shape[:2]
@@ -435,14 +476,24 @@ class SessionRunner:
 
                 dx, dy, ok = m.camera.update(frame, rect)
                 camera_delta = (dx, dy) if ok else (0.0, 0.0)
+                m.tracker.update(state, camera_delta)
 
-                # --- the policy ------------------------------------------- #
-                if policy is not None:
+                # --- the brain, or the policy ------------------------------ #
+                goal = None
+                if m.brain is not None:
+                    goal = m.brain.decide(state, m.planner, m.tracker)
+                    action = [0, 0]
+                    policy_source = "tactical"
+                elif policy is not None:
                     max_hp = m.calc._max_health or m.calc.config.default_max_health
+                    # Encoded the way training sees it: velocity from the
+                    # camera and the previous action were both missing here,
+                    # so the policy ran on inputs it never trained on.
                     obs = encode_observation(state, max_hp, (fw, fh),
+                                             velocity=(-camera_delta[0], -camera_delta[1]),
+                                             prev_action=m.prev_raw,
                                              planner_status=m.planner.status())
-                    action, _ = policy.predict(obs, deterministic=cfg.deterministic)
-                    action = [int(v) for v in np.asarray(action).ravel()[:2]]
+                    action = m.stepper(obs)
                     policy_source = slot.source
                 else:
                     # Random still exercises relocation, A*, clearance and gas
@@ -452,15 +503,25 @@ class SessionRunner:
                     policy_source = "none"
 
                 combat = m.combat.decide(state, frame_size=(fw, fh),
-                                         world=m.planner.world)
+                                         world=m.planner.world, tracker=m.tracker,
+                                         hint=getattr(goal, "hint", None))
+                if (combat.attack or combat.super) and combat.target_kind != "box":
+                    m.killer.note_fired()
 
                 kwargs = dict(state=state, frame_size=(fw, fh), planner=m.planner,
                               terrain=terrain, camera_delta=camera_delta,
                               gas_grid=gas, combat=combat)
-                if executor is None:
+                if goal is not None:
+                    if executor is None:
+                        intent = decode_goal(goal, **kwargs)     # nothing is sent
+                    else:
+                        intent = executor.apply_goal(goal, **kwargs)
+                    action = [int(intent.raw[0]), int(intent.raw[1])]
+                elif executor is None:
                     intent = decode_action(action, **kwargs)     # nothing is sent
                 else:
                     intent = executor.apply(action, **kwargs)
+                m.prev_raw = tuple(intent.raw)
 
                 # --- the picture ------------------------------------------ #
                 try:
@@ -603,6 +664,7 @@ def _decision_summary(intent, planner, action, policy_source, combat) -> dict:
         "policy": policy_source,          # "brawler" | "base" | "none"
         "combat": [bool(combat[0]), bool(combat[1])],
         "combat_reason": str(getattr(combat, "reason", "")),
+        "tactic": getattr(intent, "tactic", None),
         "waypoint": [round(float(v)) for v in wp] if wp else None,
         "planner": {
             "active": bool(getattr(st, "active", False)),

@@ -528,8 +528,10 @@ class CombatPolicy:
             kind = "box" if chosen.kind == "box" else "target"
             self.last_reason = f"{kind} at {dist:.2f}"
         if attack and cfg.attack_interval_s > 0 and cfg.tick_seconds > 0:
+            # Decremented at the top of every decide(), so N here means the
+            # next shot is allowed N ticks from now.
             self._attack_cooldown = max(0, int(round(cfg.attack_interval_s
-                                                     / cfg.tick_seconds)) - 1)
+                                                     / cfg.tick_seconds)))
 
         charge = getattr(state, "super_charge", None) or 0.0
         fire_super = (chosen.kind == "enemy"

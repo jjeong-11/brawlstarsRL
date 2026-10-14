@@ -233,7 +233,10 @@ def train(data: str, out: str, epochs: int = 12, batch: int = 256,
     from stable_baselines3.common.vec_env import DummyVecEnv
     from stable_baselines3.common.monitor import Monitor
 
-    env = make_env(live=False)
+    # Only the spaces are needed here. The simulator env has the live
+    # observation layout and needs no recording on disk (the recordings were
+    # deleted -- see rl/train.py), so it is the one to build.
+    env = make_env(sim=True)
     venv = DummyVecEnv([lambda: Monitor(env)])
     if obs.shape[1] != venv.observation_space.shape[0]:
         raise SystemExit(

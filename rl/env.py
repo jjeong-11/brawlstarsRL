@@ -60,7 +60,8 @@ from .path_planner import WaypointPlanner, PlannerStatus
 from .rewards import RewardCalculator, RewardConfig
 from .state import GameState, adapt_live_state
 from .kills import KillAttributor
-from .combat import CombatPolicy
+from .combat import CombatConfig, CombatPolicy
+from .enemy_tracker import EnemyTracker
 from .menus import navigate_to_match
 
 N_ENEMY_SLOTS = 3          # nearest N enemies encoded individually
@@ -311,6 +312,15 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         Real-time pacing per step (0 for offline/fast).
     max_ticks : int
         Truncation horizon.
+    brain : "policy" | "tactical"
+        Who chooses where to move. "policy" (default) is the learned
+        (heading, distance) action, unchanged. "tactical" hands movement to
+        rl/tactics.TacticalBrain -- the action passed to step() is then
+        ignored, and info["teacher_action"] carries the brain's choice
+        quantised to the same action space (behaviour-cloning labels).
+    ability : brawlers.abilities.Ability | str | None
+        This brawler's combat facts (range, lobbing, aim mode). A roster id is
+        looked up. None keeps the old brawler-agnostic gun.
     """
 
     metadata = {"render_modes": []}
@@ -329,6 +339,10 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         profile_every: int = 0,
         trace_seconds: float = 0.0,
         action_delay: int = 0,
+        brain: str = "policy",
+        ability=None,
+        combat_config: Optional[CombatConfig] = None,
+        tactics_config=None,
     ):
         self.source_factory = source_factory
         # >0 prints a wall-clock breakdown every N steps (see _report_profile).
@@ -344,7 +358,31 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self.super_charge_fn = super_charge_fn
         self.kills_fn = kills_fn
         self.kill_attr = KillAttributor()   # default kill attribution
-        self.combat = CombatPolicy()        # scripted attack/super
+        if isinstance(ability, str):
+            from brawlers.abilities import default_abilities
+            ability = default_abilities().get(ability)
+        self.ability = ability
+        # Scripted attack/super. The tick length and the measured action delay
+        # are what turn tracked velocities into a lead (see rl/combat.py).
+        if combat_config is None:
+            combat_config = CombatConfig(
+                tick_seconds=float(tick_seconds) if tick_seconds else 0.1,
+                latency_ticks=float(max(1, action_delay)))
+        self.combat = CombatPolicy(combat_config, ability=ability)
+        # World-frame enemy/box/cube tracks: velocities for leading, memory of
+        # enemies in bushes and of boxes that scrolled off screen.
+        self.tracker = EnemyTracker()
+        if brain not in ("policy", "tactical"):
+            raise ValueError(f"brain must be 'policy' or 'tactical', got {brain!r}")
+        self.brain_mode = brain
+        self.brain = None
+        if brain == "tactical":
+            from .tactics import TacticalBrain, TacticsConfig
+            self.brain = TacticalBrain(
+                tactics_config or TacticsConfig(
+                    tick_seconds=float(tick_seconds) if tick_seconds else 0.1),
+                ability=ability, combat=self.combat)
+        self._last_goal = None
         # Anti-idle: positives are withheld unless the agent moved within this many
         # seconds. Attack is also suppressed unless an enemy is visible.
         self.move_window_seconds = move_window_seconds
@@ -428,6 +466,10 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         self.reward_calc.reset()
         self.kill_attr.reset()
         self.combat.reset()
+        self.tracker.reset()           # last match's enemies are not this match's
+        if self.brain is not None:
+            self.brain.reset()
+        self._last_goal = None
         self.path_planner.reset()      # drop any commitment from the last match
         self.camera.reset()            # and any cross-match frame correlation
         self.terrain_profiles.reset()  # the next match may be a different map
@@ -513,7 +555,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
                                                  if abs(v) > 1e-9))
         print(f"{bar}", flush=True)
 
-    def _combat(self):
+    def _combat(self, hint=None):
         """Scripted attack/super for this step. See rl/combat.py.
 
         This replaces `_gate_weapons`, which took the policy's attack and super
@@ -523,25 +565,40 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         be read and tested on its own.
         """
         return self.combat.decide(self._last_state, frame_size=self.frame_size,
-                                  world=self.path_planner.world)
+                                  world=self.path_planner.world,
+                                  tracker=self.tracker, hint=hint)
+
+    def _decide(self):
+        """(goal or None, combat decision) for this step."""
+        goal = None
+        if self.brain is not None:
+            goal = self.brain.decide(self._last_state, self.path_planner, self.tracker)
+        self._last_goal = goal
+        decision = self._combat(getattr(goal, "hint", None))
+        return goal, decision
+
+    def _act(self, action, goal, decision, camera_delta, gas_grid):
+        kwargs = dict(state=self._last_state, frame_size=self.frame_size,
+                      planner=self.path_planner, terrain=self._terrain,
+                      camera_delta=camera_delta, gas_grid=gas_grid, combat=decision)
+        if goal is not None:
+            return self.executor.apply_goal(goal, **kwargs)
+        return self.executor.apply(action, **kwargs)
 
     def step(self, action):
         t_step = time.perf_counter()
-        fired_attack, fired_super = self._combat()
-        if fired_attack or fired_super:
-            # Kill attribution needs to know we actually shot. It used to infer
-            # this from the super charge rising, which silently stops working at
-            # full charge -- see rl/kills.py.
+        goal, decision = self._decide()
+        if (decision.attack or decision.super) and getattr(decision, "target_kind", None) != "box":
+            # Kill attribution needs to know we actually shot AT SOMEONE. It used
+            # to infer this from the super charge rising, which silently stops
+            # working at full charge -- see rl/kills.py. A shot at a power-cube
+            # box is not evidence of a kill.
             self.kill_attr.note_fired()
+        fired_attack, fired_super = bool(decision.attack), bool(decision.super)
 
         t0 = time.perf_counter()
-        intent = self.executor.apply(action, state=self._last_state,
-                                     frame_size=self.frame_size,
-                                     planner=self.path_planner,
-                                     terrain=self._terrain,
-                                     camera_delta=self._camera_delta,
-                                     gas_grid=self._gas_grid_now,
-                                     combat=(fired_attack, fired_super))  # 1) act
+        intent = self._act(action, goal, decision, self._camera_delta,
+                           self._gas_grid_now)                     # 1) act
         self._prof["act"] += time.perf_counter() - t0
 
         self._prev_action = intent.raw
@@ -585,6 +642,11 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
             "planner_mode": status.mode,
             "escaping_gas": status.escaping_gas,
         }
+        if goal is not None:
+            # The brain's choice in the policy's own action space: run with
+            # brain="tactical" and these are behaviour-cloning labels.
+            info["teacher_action"] = [int(intent.raw[0]), int(intent.raw[1])]
+            info["tactic"] = intent.tactic
 
         # Trace AFTER the decision has been made and scored, so the annotated
         # frame shows the route that was actually taken and the reward it
@@ -609,16 +671,11 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         direction), but the expensive capture + perception + reward runs only once
         per decision (on the final, full step()).
         """
-        combat = self._combat()
+        goal, combat = self._decide()
         # No fresh frame here, so no camera delta to apply: passing (0, 0) keeps
         # the latched waypoint where it is rather than drifting it by a stale
         # measurement that has already been consumed.
-        intent = self.executor.apply(action, state=self._last_state,
-                                     frame_size=self.frame_size,
-                                     planner=self.path_planner,
-                                     terrain=self._terrain,
-                                     camera_delta=(0.0, 0.0),
-                                     gas_grid=None, combat=combat)
+        intent = self._act(action, goal, combat, (0.0, 0.0), None)
         if intent.move != (0.0, 0.0):
             self._last_move_t = time.time()
         self._pace()
@@ -738,6 +795,9 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
                                  kills_this_tick=kills, frame_size=(fw, fh))
         t0 = time.perf_counter()
         self._update_spatial(frame, state)
+        # Same camera delta the planner gets, so tracks and the world map stay
+        # in one frame of reference.
+        self.tracker.update(state, self._camera_delta)
         self._prof["spatial"] += time.perf_counter() - t0
         return state
 

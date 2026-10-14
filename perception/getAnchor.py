@@ -87,8 +87,18 @@ def find_player_position_ex(image: np.ndarray, hsv: np.ndarray = None, prior=Non
     return r.x, r.y, r.radius, r.verified
 
 
+# The player's green (ring and bar). Module level so perception.liveLoop can
+# build the full-frame mask on a worker thread and hand it in.
+GREEN_LOWER = np.array([35, 50, 50])
+GREEN_UPPER = np.array([85, 255, 255])
+
+
+def green_mask_full(hsv: np.ndarray) -> np.ndarray:
+    return cv2.inRange(hsv, GREEN_LOWER, GREEN_UPPER)
+
+
 def find_player_position_full(image: np.ndarray, hsv: np.ndarray = None,
-                              prior=None) -> AnchorResult:
+                              prior=None, green_full: np.ndarray = None) -> AnchorResult:
     """Finds the local player's position. Returns an :class:`AnchorResult`.
 
     `verified` means the anchor was confirmed by a readable HP number, i.e. it
@@ -159,9 +169,14 @@ def find_player_position_full(image: np.ndarray, hsv: np.ndarray = None,
     sy1 = min(height, int(height * 0.80) + 40)
     center_hsv = hsv[sy0:sy1, sx0:sx1]
 
-    lower_green = np.array([35, 50, 50])
-    upper_green = np.array([85, 255, 255])
-    green_mask = cv2.inRange(center_hsv, lower_green, upper_green)
+    lower_green, upper_green = GREEN_LOWER, GREEN_UPPER
+    # `green_full` (optional) is the same inRange over the whole frame, built
+    # concurrently by the caller; slicing it is bit-identical to masking the
+    # slice, and it is what the ring fallback below needs anyway.
+    if green_full is not None:
+        green_mask = green_full[sy0:sy1, sx0:sx1]
+    else:
+        green_mask = cv2.inRange(center_hsv, lower_green, upper_green)
 
     # STEP 1: White digit-line candidates across the central region.
     lower_white = np.array([0, 0, 200])
@@ -298,7 +313,8 @@ def find_player_position_full(image: np.ndarray, hsv: np.ndarray = None,
     # momentarily obscured by an effect). The ring finder searches the whole
     # frame, so build the full-frame green mask lazily here (the hot path
     # above only ever needed the central region).
-    green_full = cv2.inRange(hsv, lower_green, upper_green)
+    if green_full is None:
+        green_full = cv2.inRange(hsv, lower_green, upper_green)
     return _find_player_by_ring(image, hsv, green_full)
 
 

@@ -44,8 +44,8 @@ class PerceptionModel:
     anchor_jitter_px: float = 5.0
     hp_read: float = 0.8
     ammo_read: float = 0.5
-    entity_interval_s: float = 0.5   # liveLoop.STAGE_INTERVALS["entities"]
-    pickup_interval_s: float = 0.25
+    entity_interval_s: float = 0.2   # liveLoop.STAGE_INTERVALS["entities"]
+    pickup_interval_s: float = 0.2
     player_interval_s: float = 0.3
     game_state_interval_s: float = 1.0
     enemy_miss: float = 0.08
@@ -304,6 +304,8 @@ class AgentStack:
         self.brain = TacticalBrain(tcfg, ability=ability, combat=self.combat)
         self.policy = policy
         self._action = [0, 0]
+        self._prev_raw = None
+        self._max_hp = None
         self.last_goal = None
         self.last_decision = None
         self.history = []
@@ -326,7 +328,16 @@ class AgentStack:
                                           camera_delta=cam, gas_grid=gas)
         else:
             if self.controller == "policy" and self.policy is not None:
-                action = self.policy(state, self.planner)
+                # Encoded exactly as rl/env.py does live: velocity from the
+                # camera, the previous action, the planner's commitment.
+                from rl.env import encode_observation
+                if state.health:
+                    self._max_hp = max(self._max_hp or state.health, state.health)
+                obs = encode_observation(state, self._max_hp or 4000.0, frame,
+                                         velocity=(-cam[0], -cam[1]),
+                                         prev_action=self._prev_raw,
+                                         planner_status=self.planner.status())
+                action = self.policy(obs)
             else:
                 action = [self.rng.randrange(16), self.rng.randrange(3)]
             self._action = action
@@ -335,6 +346,8 @@ class AgentStack:
         decision = self.combat.decide(state, frame_size=frame, world=self.planner.world,
                                       tracker=self.tracker, hint=hint)
         self.last_decision = decision
+        self._prev_raw = (int(self._action[0]), int(self._action[1]),
+                          int(bool(decision.attack)), int(bool(decision.super)))
         return move, decision
 
 
@@ -349,6 +362,40 @@ def playable_maps():
         from .arena import playable
         _PLAYABLE = [gm for gm in database() if playable(gm)]
     return _PLAYABLE
+
+
+_BUSH = {}
+
+
+def build_match(seed: int, brawler: str = "shelly", map_name: Optional[str] = None,
+                bot_skill: Tuple[float, float] = (0.25, 1.0)):
+    """(arena, bots, ability, game_map) for a seeded match.
+
+    Shared by `run_match` and `sim.gym_env`, so a policy pretrained in the gym
+    env and a controller scored by `sim.evaluate` face identical matches.
+    """
+    from brawlers.abilities import default_abilities
+    from perception.mapdb import database
+
+    from .arena import Arena, bush_mask, stats_for
+    from .bots import Bot, BotSkill
+
+    rng = random.Random(seed)
+    db = database()
+    maps = playable_maps()
+    gm = db.get(map_name) if map_name else maps[rng.randrange(len(maps))]
+    if gm is None:
+        raise ValueError(f"unknown map {map_name!r}")
+    book = default_abilities()
+    ability = book.get(brawler)
+    pool = [a for a in book.all() if a.range_tiles]
+    stats = [stats_for(ability)] + [stats_for(rng.choice(pool)) for _ in range(9)]
+    if gm.name not in _BUSH:
+        _BUSH[gm.name] = bush_mask(gm)
+    arena = Arena(gm, _BUSH[gm.name], stats, seed=seed)
+    bots = [Bot(arena, i, BotSkill.sample(rng, *bot_skill), random.Random(seed * 101 + i))
+            for i in range(1, len(stats))]
+    return arena, bots, ability, gm
 
 
 @dataclass
@@ -388,25 +435,9 @@ def run_match(controller: str = "tactical", brawler: str = "shelly", seed: int =
               stop_on_death: bool = True, on_tick: Optional[Callable] = None
               ) -> MatchResult:
     """Play one seeded match. Same seed => same map, spawns, bots and boxes."""
-    from brawlers.abilities import default_abilities
-    from perception.mapdb import database
-
-    from .arena import Arena, bush_mask, stats_for
     from .bots import Bot, BotSkill
 
-    rng = random.Random(seed)
-    db = database()
-    maps = playable_maps()
-    gm = db.get(map_name) if map_name else maps[rng.randrange(len(maps))]
-    if gm is None:
-        raise ValueError(f"unknown map {map_name!r}")
-    book = default_abilities()
-    ability = book.get(brawler)
-    pool = [a for a in book.all() if a.range_tiles]
-    stats = [stats_for(ability)] + [stats_for(rng.choice(pool)) for _ in range(9)]
-    arena = Arena(gm, bush_mask(gm), stats, seed=seed)
-    bots = [Bot(arena, i, BotSkill.sample(rng, *bot_skill), random.Random(seed * 101 + i))
-            for i in range(1, len(stats))]
+    arena, bots, ability, gm = build_match(seed, brawler, map_name, bot_skill)
     view = SimView(arena, 0, perception or PerceptionModel(), seed=seed)
     agent = AgentStack("idle" if controller == "bot" else controller, ability=ability,
                        seed=seed, combat_config=combat_config,

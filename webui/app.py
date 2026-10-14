@@ -179,6 +179,7 @@ def create_app() -> Flask:
                 sendevent_orientation=str(body.get("sendevent_orientation") or "A"),
                 save_traces=bool(body.get("save_traces", False)),
                 deterministic=bool(body.get("deterministic", False)),
+                brain=str(body.get("brain") or "auto"),
             )
             return jsonify(runner.start(cfg))
         except (KeyError, ValueError) as e:

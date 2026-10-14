@@ -68,7 +68,7 @@ const el = {
   facts: $('facts'), aimNote: $('aimNote'), multiWarn: $('multiWarn'), modelLine: $('modelLine'),
   mode: $('mode'), segThumb: $('segThumb'), modeHint: $('modeHint'),
   serial: $('serial'), fps: $('fps'), fpsVal: $('fpsVal'),
-  backend: $('backend'), deterministic: $('deterministic'),
+  backend: $('backend'), deterministic: $('deterministic'), brain: $('brain'),
   saveTraces: $('saveTraces'), videoPath: $('videoPath'),
   start: $('startBtn'), stop: $('stopBtn'),
   pill: $('statusPill'), stream: $('stream'), placeholder: $('placeholder'),
@@ -270,6 +270,7 @@ async function start() {
         source: video ? 'video' : 'phone',
         video_path: video || null,
         backend: el.backend.value,
+        brain: el.brain.value,
         deterministic: el.deterministic.checked,
         save_traces: el.saveTraces.checked,
       }),
@@ -394,9 +395,11 @@ function render(s) {
   const p = d.planner || {};
   kv(el.decision, [
     ['intent', d.intent || '—'],
-    ['policy', d.policy === 'brawler' ? 'brawler weights'
+    ['movement', d.policy === 'tactical' ? 'tactical brain'
+      : d.policy === 'brawler' ? 'brawler weights'
       : d.policy === 'base' ? 'shared base' : 'random',
-      d.policy === 'brawler' ? 'on' : 'off'],
+      (d.policy === 'brawler' || d.policy === 'tactical') ? 'on' : 'off'],
+    ['tactic', d.tactic || '—', d.tactic ? 'info' : 'off'],
     ['aim', d.aim_mode === 'manual'
       ? (d.aim ? `manual ${d.aim[0].toFixed(2)}, ${d.aim[1].toFixed(2)}` : 'manual')
       : 'auto', d.aim_mode === 'manual' ? 'info' : 'off'],

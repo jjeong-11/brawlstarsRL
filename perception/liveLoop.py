@@ -38,12 +38,12 @@ import numpy as np
 _DEBUG_DIR = Path(__file__).resolve().parent.parent / "debugOutput"
 
 from .getAnchor import (find_player_position, find_player_position_ex,
-                        find_player_position_full)
+                        find_player_position_full, green_mask_full)
 from .getHealth import find_health_info
 from .getAmmo import find_ammo_info, AmmoLocator
 from .getCube import find_cube_info
 from .getEnemies import find_entities, find_enemy_health_bars
-from .getPickups import find_ground_cubes
+from .getPickups import find_ground_cubes, cube_masks
 from .getGas import gas_info
 from .getSuper import find_super_info
 from .getGameState import get_game_state
@@ -54,11 +54,20 @@ from .getGameState import get_game_state
 # read), the player/entity stages are cheap enough to refresh several
 # times per second; game_state still uses tesseract for the "Brawlers
 # left" line (it contains letters), so it stays at 1s.
+#
+# ENTITIES 0.5s -> 0.2s, PICKUPS 0.25s -> 0.2s. Measured in the simulator
+# (sim/evaluate.py, 96 paired matches): refreshing enemy positions every 0.2s
+# instead of every 0.5s DOUBLED the win rate (10% -> 20%) and raised enemy hit
+# rate from 34% to 42%. Half a second is long enough for an enemy to cross a
+# tile and a half; every decision downstream -- aim, standoff, retreat -- was
+# working from where he used to be. The bar scan that made this expensive now
+# runs on a worker thread alongside the anchor stage (see LivePerception
+# `parallel`), so the faster refresh costs ~4ms a tick rather than ~10.
 STAGE_INTERVALS = {
     "game_state": 1.0,    # brawlers-left OCR + screen classification (tesseract)
     "player": 0.3,        # anchor + HP + ammo + cube counter
-    "entities": 0.5,      # enemies + boxes
-    "pickups": 0.25,      # ground cubes (color only)
+    "entities": 0.2,      # enemies + boxes
+    "pickups": 0.2,       # ground cubes (color only)
     "gas": 0.0,           # every tick (color only, cheapest)
     "super": 0.2,         # super-charge ring (color only, cheap)
 }
@@ -286,8 +295,19 @@ class LivePerception:
     # brawler HP with full cube boosts stays well under this.
     HP_SANITY_CAP = 20000
 
-    def __init__(self, async_game_state: bool = True):
+    def __init__(self, async_game_state: bool = True, parallel: bool = True):
         self.last_run = {name: 0.0 for name in STAGE_INTERVALS}
+        # PARALLEL STAGES. The full-frame colour scans (enemy health bars,
+        # cube masks, gas) depend only on the frame, and OpenCV releases the
+        # GIL inside them -- so they run on worker threads while the anchor +
+        # HUD stage runs here. Outputs are identical to the serial order (the
+        # consumers still wait for and use exactly the same results); only the
+        # wall time changes. parallel=False restores the serial path.
+        self._pool = None
+        if parallel:
+            from concurrent.futures import ThreadPoolExecutor
+            self._pool = ThreadPoolExecutor(max_workers=3,
+                                            thread_name_prefix="perception")
         self.cache = {
             "game_state": {"state": "unknown", "brawlers_left": None, "rank": None},
             "anchor": None,
@@ -343,6 +363,9 @@ class LivePerception:
         t = self._gs_thread
         if t is not None and t.is_alive():
             t.join(timeout=3.0)
+        if self._pool is not None:
+            self._pool.shutdown(wait=False)
+            self._pool = None
 
     def _due(self, name, now):
         if now - self.last_run[name] >= STAGE_INTERVALS[name]:
@@ -412,14 +435,29 @@ class LivePerception:
             c["anchor"] = None
             c["super_charge"] = 0.0
 
-        if in_match and self._due("player", now):
+        # Decide the colour-scan stages NOW and start them on the worker
+        # threads, so they overlap the anchor/HUD stage below.
+        entities_due = in_match and self._due("entities", now)
+        pickups_due = in_match and self._due("pickups", now)
+        fut_bars = fut_masks = None
+        if self._pool is not None and (entities_due or pickups_due):
+            fut_bars = self._pool.submit(find_enemy_health_bars, frame, hsv)
+            if pickups_due:
+                fut_masks = self._pool.submit(cube_masks, hsv)
+
+        player_due = in_match and self._due("player", now)
+        fut_green = (self._pool.submit(green_mask_full, hsv)
+                     if (player_due and self._pool is not None) else None)
+
+        if player_due:
             t0 = time.time()
             # Seed with the previous anchor: the player barely moves between
             # frames, so his own last position discriminates far better than
             # "nearest the screen centre", which an enemy standing inboard of
             # him satisfies just as well. See find_player_position_ex.
             _res = find_player_position_full(
-                frame, hsv=hsv, prior=(c["anchor"][0], c["anchor"][1]) if c["anchor"] else None)
+                frame, hsv=hsv, prior=(c["anchor"][0], c["anchor"][1]) if c["anchor"] else None,
+                green_full=fut_green.result() if fut_green is not None else None)
             ax, ay, ar, verified = _res.x, _res.y, _res.radius, _res.verified
             raw_anchor = (ax, ay, ar)
             # Which strategy produced this, so a WRONG anchor and a MISSING
@@ -552,14 +590,20 @@ class LivePerception:
                         self._pending_cubes = new_cubes
             timings["player"] = time.time() - t0
 
+        # Gas only needs the frame and the anchor (now final for this tick):
+        # start it on a worker while the entity OCR runs here.
+        gas_due = in_match and self._due("gas", now)
+        fut_gas = None
+        if gas_due and self._pool is not None:
+            fut_gas = self._pool.submit(gas_info, frame, c["anchor"], 0.5, hsv)
+
         # The entity and pickup stages both need the full-screen red-bar
         # scan; when both are due on the same tick, run it once and share.
-        entities_due = in_match and self._due("entities", now)
-        pickups_due = in_match and self._due("pickups", now)
         bars = None
         if entities_due or pickups_due:
             t0 = time.time()
-            bars = find_enemy_health_bars(frame, hsv=hsv)
+            bars = (fut_bars.result() if fut_bars is not None
+                    else find_enemy_health_bars(frame, hsv=hsv))
             timings["bars"] = time.time() - t0
 
         if entities_due:
@@ -583,14 +627,16 @@ class LivePerception:
                 exclude.append(c["anchor"])
             exclude += [(e["center"][0], e["center"][1], e["radius"]) for e in c["enemies"]]
             exclude += [(b["center"][0], b["center"][1], b["radius"]) for b in c["boxes"]]
-            c["cubes"] = find_ground_cubes(frame, exclude_positions=exclude,
-                                           hsv=hsv, bars=bars)
+            c["cubes"] = find_ground_cubes(
+                frame, exclude_positions=exclude, hsv=hsv, bars=bars,
+                masks=fut_masks.result() if fut_masks is not None else None)
             timings["pickups"] = time.time() - t0
         c["pickups_fresh"] = bool(pickups_due)
 
-        if in_match and self._due("gas", now):
+        if gas_due:
             t0 = time.time()
-            gi = gas_info(frame, c["anchor"], hsv=hsv)   # anchor may be None: frame center
+            gi = (fut_gas.result() if fut_gas is not None
+                  else gas_info(frame, c["anchor"], hsv=hsv))   # anchor None: frame centre
             c["in_gas"] = gi["in_gas"]
             c["gas_sides"] = gi["sides"]
             c["gas_safe"] = gi["safe_vector"]

@@ -31,13 +31,26 @@ def make_env(live: bool = False, serial=None, controls_path=None, tick_seconds: 
              action_repeat: int = 1, use_scrcpy: bool = False, use_sendevent: bool = False,
              sendevent_orientation: str = "A", sendevent_device: str = None,
              profile_every: int = 0, trace_seconds: float = 0.0,
-             action_delay: int = 0):
+             action_delay: int = 0, sim: bool = False, brawler: str = None):
     reward_config = RewardConfig()   # spec defaults; tune here
     extra = {}
     if trace_seconds:
         extra["trace_seconds"] = trace_seconds
     if action_delay:
         extra["action_delay"] = action_delay
+    if brawler:
+        extra["ability"] = brawler
+
+    if sim:
+        # The simulator (sim/gym_env.py): same observation, action space and
+        # reward as the phone, thousands of steps a minute. A warm start for
+        # live training, not a replacement -- see that module.
+        from sim.gym_env import SimShowdownEnv
+        env = SimShowdownEnv(brawler=brawler or "shelly", reward_config=reward_config,
+                             dt=tick_seconds or 0.1, action_delay=action_delay)
+        if action_repeat and action_repeat > 1:
+            print("(--action-repeat is not supported with --sim; ignored)")
+        return env
 
     if not live:
         # The recordings are gitignored (612MB, two of them over GitHub's 100MB
@@ -123,6 +136,13 @@ def _default_controls_path(explicit):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--live", action="store_true", help="play a real match on the phone")
+    ap.add_argument("--sim", action="store_true",
+                    help="train in the offline simulator (sim/gym_env.py) instead "
+                         "of a recording or the phone. Same observation, action "
+                         "space and reward, so the checkpoint continues live.")
+    ap.add_argument("--brawler", default=None,
+                    help="roster id (e.g. piper): per-brawler range and aim for "
+                         "the combat script, and the brawler simulated by --sim")
     ap.add_argument("--serial", default=None, help="adb device serial (needed if >1 device)")
     ap.add_argument("--controls", default=None,
                     help="path to controls.json (calibrated button coords); "
@@ -231,7 +251,8 @@ def main() -> None:
                        sendevent_orientation=args.sendevent_orientation,
                        sendevent_device=args.sendevent_device,
                        profile_every=args.profile, trace_seconds=args.trace,
-                       action_delay=args.action_delay)
+                       action_delay=args.action_delay, sim=args.sim,
+                       brawler=args.brawler)
     except RuntimeError as e:
         print("Could not start live env:", e)
         return
@@ -306,8 +327,15 @@ def main() -> None:
     if save_path.with_suffix(".zip").exists() and not args.fresh:
         print(f"Resuming from {save_path.name}.zip")
         try:
-            model = algo.load(str(save_path), env=venv)
-        except (ValueError, AssertionError, KeyError) as e:
+            # Load with whichever algorithm wrote the file (rl/checkpoints.py):
+            # the shipped base is plain PPO, and RecurrentPPO.load() raises
+            # AttributeError on it, which used to escape this handler entirely.
+            from .checkpoints import load_policy
+            model, algo_name = load_policy(save_path, env=venv)
+            if algo_name != algo.__name__:
+                print(f"  checkpoint is {algo_name}; continuing with {algo_name} "
+                      f"(pass --fresh to start a {algo.__name__} run instead)")
+        except (ValueError, AssertionError, KeyError, AttributeError) as e:
             print(f"\nCould not resume: {e}\n"
                   f"The saved policy's shapes do not match this env "
                   f"(obs {env.observation_space.shape}, act {env.action_space}).\n"

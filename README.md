@@ -714,6 +714,57 @@ space anyway.
 Both the action head and the input layer changed shape, so weights cannot transfer.
 `train.py` writes each design to its own path and refuses a mismatched resume.
 
+## Tactical brain, simulator and combat fixes (latest pass)
+
+**Movement now defaults to a scripted strategy** (`rl/tactics.py`) in the web UI
+("Movement: Auto" = tactical brain unless the brawler has its own trained
+weights). Modes: gas, retreat, heal, engage, cube, box, zone, explore, chosen by
+utility with hysteresis and routed through `WaypointPlanner.plan_goal()`.
+`rl/enemy_tracker.py` keeps world-frame tracks (velocity, enemies hidden in
+bushes, remembered boxes). `python scripts/watch_live.py --trace 2 --brawler colt`
+shows its decisions; `BrawlStarsEnv(brain="tactical")` exposes
+`info["teacher_action"]` for behaviour cloning.
+
+**Offline simulator** (`sim/`): 10-player Showdown on 66 real layouts, driving the
+real planner/tracker/combat/brain with realistic perception noise.
+
+```bash
+python -m sim.evaluate --controllers tactical,random,legacy --matches 96
+python -m sim.evaluate --controllers tactical --tactics stand_and_fight_tiles=4.5   # A/B arms
+python -m sim.evaluate --controllers policy --policy brawlstars_move.zip
+python scripts/train_rl.py --sim --brawler piper                                  # PPO in the sim
+python -m sim.gym_env collect --episodes 200 --out bc_sim.npz                     # BC from the brain
+```
+
+Last measured (96 paired seeds, Shelly, before the final corner-cutting fix):
+tactical 20% wins / 45% top-3 / mean rank 4.38; shipped policy 7% / 43% / 4.74;
+random headings 5% / 39% / 4.76; the old bot (legacy) 2% / 31% / 5.55.
+Treat differences, not absolute numbers, as the signal.
+
+**Bugs fixed along the way**
+
+| bug | effect |
+|---|---|
+| range gate compared a width fraction against a short-side distance, then capped at 0.42 | every brawler fired only within ~3.2 tiles (Piper's range is 10) |
+| combat returned "no target" without an enemy | power-cube boxes were never shot |
+| `getTerrain` freed the player's whole 3x3 | walls touching the player fused as floor; gas escape pushed into them |
+| pure pursuit skipped near vertices | agent wedged on wall corners |
+| world-map recentre did not move the waypoint / localiser pose | waypoint jumped half a screen |
+| registry tried RecurrentPPO only | the shipped PPO base policy never loaded (silent random headings) |
+| web UI "unknown" state re-armed new-match edge | world map wiped every 1-2 s |
+| sendevent: one adb spawn per event, aim ignored | 100-250 ms act cost; manual aim became auto-aim |
+
+Perception: colour scans run on worker threads (bit-identical, ~32 -> ~20 ms
+worst case), and entity refresh went 0.5 s -> 0.2 s (doubled sim win rate).
+Also added: bump sensor, deep-safety gas escape, fire-rate limit, partial lead
+for manual aimers, `rl/checkpoints.py` loader. Tests: `tests/test_tactics.py`,
+`tests/test_perf.py`.
+
+**Next steps**: re-run `sim.evaluate` after the corner fix; tune
+`TacticsConfig` per brawler via `brawlers/profiles.py` `tactics_overrides`;
+BC-pretrain from the brain then PPO in `--sim`; verify `tiles_across_screen`
+on the device.
+
 ## What still needs building
 
 The whole reward list now runs on real perception — including **super charge**

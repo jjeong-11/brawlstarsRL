@@ -73,6 +73,7 @@ _C_STICK = (255, 255, 255)
 _C_WALL = (60, 60, 200)
 _C_GAS = (120, 255, 180)
 _C_TEXT = (255, 255, 255)
+_C_TARGET = (40, 40, 255)
 _C_PANEL = (24, 24, 24)
 
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -264,6 +265,7 @@ class DecisionTracer:
             _draw_grids(out, world)
         _draw_entities(out, state, live)
         _draw_plan(out, planner, state)
+        _draw_target(out, state, intent)
 
         scale = min(1.0, cfg.max_width / float(W))
         if scale < 1.0:
@@ -430,8 +432,29 @@ def _draw_minimap(out, world, planner, state) -> None:
     cv2.putText(out, "world map (fused)", (x0, y0 + mh + 16), _FONT, 0.45, _C_TEXT, 1)
 
 
+def _draw_target(out, state, intent) -> None:
+    """What the gun is pointed at: a crosshair, and a line from the player.
+
+    Drawn because "it shot the box instead of the man" and "it aimed where he
+    was" are only visible if the chosen target is on the picture.
+    """
+    tgt = getattr(intent, "target", None) if intent is not None else None
+    if tgt is None:
+        return
+    x, y = int(tgt[0]), int(tgt[1])
+    fired = getattr(intent, "fire_attack", False) or getattr(intent, "fire_super", False)
+    col = _C_TARGET if getattr(intent, "target_kind", None) != "box" else _C_BOX
+    cv2.drawMarker(out, (x, y), col, cv2.MARKER_CROSS, 46, 3 if fired else 1)
+    cv2.circle(out, (x, y), 26, col, 3 if fired else 1)
+    p = getattr(state, "player_pos", None) if state is not None else None
+    if p is not None and fired:
+        cv2.line(out, (int(p[0]), int(p[1])), (x, y), col, 1, cv2.LINE_AA)
+
+
 def _draw_panel(out, status, state, intent, reward, tick) -> None:
     lines = [f"tick {tick}"]
+    if intent is not None and getattr(intent, "tactic", None):
+        lines.append(f"tactic  {intent.tactic}")
     if intent is not None:
         lines.append(f"intent  {getattr(intent, 'move_label', '?')}"
                      + ("  ATTACK" if getattr(intent, 'fire_attack', False) else "")
@@ -484,7 +507,8 @@ def _draw_legend(out) -> None:
     """Without this the overlay is a colourful mystery a week later."""
     items = [("wall (fused)", _C_WALL), ("too tight", (90, 90, 90)),
              ("gas", _C_GAS), ("A* path", _C_PATH), ("waypoint", _C_WAYPOINT),
-             ("joystick", _C_STICK), ("player", _C_PLAYER), ("enemy", _C_ENEMY)]
+             ("joystick", _C_STICK), ("player", _C_PLAYER), ("enemy", _C_ENEMY),
+             ("gun target", _C_TARGET)]
     x, y = 12, 12
     overlay = out.copy()
     cv2.rectangle(overlay, (x - 4, y - 4), (x + 132, y + 18 * len(items) + 4),
@@ -503,6 +527,10 @@ def _record(planner, state, intent, reward, tick) -> dict:
         rec["action"] = list(getattr(intent, "raw", ()) or ())
         rec["move"] = [round(v, 3) for v in getattr(intent, "move", (0, 0))]
         rec["label"] = getattr(intent, "move_label", None)
+        rec["tactic"] = getattr(intent, "tactic", None)
+        tgt = getattr(intent, "target", None)
+        rec["target"] = [round(float(v)) for v in tgt] if tgt is not None else None
+        rec["target_kind"] = getattr(intent, "target_kind", None)
     if s is not None:
         rec["planner"] = {
             "mode": s.mode, "active": s.active, "blocked": s.blocked,

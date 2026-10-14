@@ -737,9 +737,11 @@ class WaypointPlanner:
         self._push_for += 1
         if self._push_for < cfg.bump_ticks:
             return False
+        # `to_cell` is already fractional (cell k spans [k, k+1)), so the
+        # point ahead is just position + direction * reach.
         cx, cy = self._last_player_cell
-        ok = self.world.mark_bump((cx + 0.5 + mx * cfg.bump_reach_cells,
-                                   cy + 0.5 + my * cfg.bump_reach_cells))
+        ok = self.world.mark_bump((cx + mx * cfg.bump_reach_cells,
+                                   cy + my * cfg.bump_reach_cells))
         self._push_for = 0
         if ok:
             self.bumps += 1
@@ -949,7 +951,7 @@ class WaypointPlanner:
         # the exact goal cell was unreachable — a partial route is still useful.
         blocked = len(path) < 2 and reached != goal
 
-        aim = self._lookahead_point(path, player_px, short)
+        aim = self._lookahead_point(path, player_px, short, cost)
         if aim is None:
             return ((0.0, 0.0), path, True)
         return (_unit(aim[0] - player_px[0], aim[1] - player_px[1]), path, blocked)
@@ -1164,27 +1166,54 @@ class WaypointPlanner:
         path = _string_pull(_reconstruct(came, start, goal), cost)
         aim = self._lookahead_point(path, player_px,
                                     min(world.screen_gw, world.screen_gh)
-                                    * world.cell_size_px())
+                                    * world.cell_size_px(), cost)
         if aim is None:
             return None
         return (_unit(aim[0] - player_px[0], aim[1] - player_px[1]), path)
 
     # ------------------------------------------------------------------ #
-    def _lookahead_point(self, path, player_px, short):
-        """Pure pursuit: the first point on the path at least `lookahead` away.
+    def _lookahead_point(self, path, player_px, short, cost=None):
+        """Pure pursuit: the point `lookahead` along the path -- with a clear line.
 
-        Steering at the path's far end rather than its next cell is what keeps
-        movement smooth — aiming one cell ahead produces the same stair-stepping
-        zigzag the 8-direction policy had.
+        Steering at a point down the path rather than its next cell is what
+        keeps movement smooth -- aiming one cell ahead produces the same
+        stair-stepping zigzag the 8-direction policy had.
+
+        But the old rule, "the first VERTEX at least `lookahead` away", skips
+        any vertex closer than that, and after string-pulling the vertices ARE
+        the corners: the straight line from the player to the next vertex then
+        runs through the corner it was supposed to go round. The agent wedged
+        on the corner pushing into it, stuck detection re-planned the same
+        route, and it stayed there (reproduced in tests/test_tactics.py). So
+        the point is interpolated ALONG the path, and if the straight line to
+        it is not clear (given `cost`), it backs off toward the nearest vertex,
+        which string-pulling guarantees is visible.
         """
         if not path:
             return None
         lookahead = self.config.lookahead * short
-        for node in path[1:]:
-            p = self.world.to_pixels(node)
-            if hypot(p[0] - player_px[0], p[1] - player_px[1]) >= lookahead:
-                return p
-        return self.world.to_pixels(path[-1])
+        pts = [self.world.to_pixels(n) for n in path]
+        # Walk the polyline from the player's position.
+        target = pts[-1]
+        prev = (float(player_px[0]), float(player_px[1]))
+        travelled = 0.0
+        for q in pts[1:]:
+            seg = hypot(q[0] - prev[0], q[1] - prev[1])
+            if travelled + seg >= lookahead and seg > 1e-6:
+                f = (lookahead - travelled) / seg
+                target = (prev[0] + (q[0] - prev[0]) * f, prev[1] + (q[1] - prev[1]) * f)
+                break
+            travelled += seg
+            prev = q
+        if cost is None or len(pts) < 2:
+            return target
+        free = np.isfinite(cost)
+        start = self.world.clamp_cell(self.world.to_cell(player_px))
+        if _line_of_sight_lenient(free, start, self.world.clamp_cell(self.world.to_cell(target))):
+            return target
+        # Back off to the first vertex (visible by construction), or as far
+        # toward the target as stays visible.
+        return pts[1]
 
     # ------------------------------------------------------------------ #
     def _steer_direct(self, player, target, state, rect, short):
@@ -1362,6 +1391,23 @@ def _line_of_sight(free: np.ndarray, a, b) -> bool:
         if e2 < dx:
             err += dx
             y0 += sy
+
+
+def _line_of_sight_lenient(free: np.ndarray, a, b) -> bool:
+    """`_line_of_sight`, except the START cell may be blocked.
+
+    The player often stands in a cell the (inflated) grid calls solid -- right
+    against a wall, or on his own sprite -- and A* already lets him leave it.
+    Requiring the start to be free would reject every line from there.
+    """
+    if a == b:
+        return True
+    gh, gw = free.shape
+    x0, y0 = int(a[0]), int(a[1])
+    if 0 <= x0 < gw and 0 <= y0 < gh and not free[y0, x0]:
+        free = free.copy()
+        free[y0, x0] = True
+    return _line_of_sight(free, a, b)
 
 
 def _string_pull(path, cost: np.ndarray, tolerance: float = 1.15):

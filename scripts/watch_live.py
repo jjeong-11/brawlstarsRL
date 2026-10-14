@@ -122,6 +122,12 @@ def main() -> None:
                     help="policy to ask for actions under --trace. Defaults to "
                          "./brawlstars_move.zip; without one, headings are "
                          "sampled at random, which still exercises the planner.")
+    ap.add_argument("--brain", choices=("auto", "tactical", "policy"), default="auto",
+                    help="who chooses movement under --trace: rl/tactics.py "
+                         "(tactical), the policy, or auto = tactical unless "
+                         "--model is given")
+    ap.add_argument("--brawler", default=None,
+                    help="roster id (e.g. piper) for per-brawler range and aim")
     args = ap.parse_args()
 
     try:
@@ -154,7 +160,9 @@ def main() -> None:
         from rl.path_planner import WaypointPlanner
         from rl.camera_tracker import CameraTracker
         planner, camera, profiles = WaypointPlanner(), CameraTracker(), ProfileSelector()
-        policy = _load_policy(args.model)
+        use_brain = args.brain == "tactical" or (args.brain == "auto" and not args.model)
+        policy = None if use_brain else _load_policy(args.model)
+        _setup_decision(args, use_brain)
 
     started = time.time()
     ticks = 0
@@ -181,7 +189,8 @@ def main() -> None:
 
             live, _ = perception.tick(frame)
             kills = killer.update(live)
-            state = adapt_live_state(live, tick=ticks, kills_this_tick=kills)
+            state = adapt_live_state(live, tick=ticks, kills_this_tick=kills,
+                                     frame_size=(frame.shape[1], frame.shape[0]))
             result = calc.compute(state)
             ticks += 1
 
@@ -192,9 +201,12 @@ def main() -> None:
                   f"super:{(state.super_charge or 0)*100:.0f}% left:{state.players_left} "
                   f"gas:{state.in_gas} enemies:{len(state.enemy_positions)} {bd}", flush=True)
 
-            if tracer is not None and tracer.due():
+            if tracer is not None:
+                # Every tick, not just traced ones: the tracker and the world
+                # map need every frame to stay registered.
                 _trace_decision(tracer, frame, live, state, result, ticks,
-                                planner, camera, profiles, policy, calc)
+                                planner, camera, profiles, policy, calc,
+                                write=tracer.due())
 
             if args.save_preview and time.time() - last_preview >= 1.0:
                 _DEBUG.mkdir(parents=True, exist_ok=True)
@@ -235,17 +247,37 @@ def _load_policy(path):
         print(f"no policy at {p} — tracing with random headings")
         return None
     try:
-        from stable_baselines3 import PPO
-        model = PPO.load(str(p.with_suffix("")))
-        print(f"loaded policy {p.name}")
+        from rl.checkpoints import load_policy
+        model, algo = load_policy(p, device="cpu")
+        print(f"loaded policy {p.name} ({algo})")
         return model
     except Exception as e:
         print(f"could not load {p.name} ({e}) — tracing with random headings")
         return None
 
 
+_DECISION = {}
+
+
+def _setup_decision(args, use_brain: bool) -> None:
+    """Combat, tracker and (optionally) the tactical brain, built once."""
+    from brawlers.abilities import default_abilities
+    from rl.combat import CombatConfig, CombatPolicy
+    from rl.enemy_tracker import EnemyTracker
+    from rl.tactics import TacticalBrain, TacticsConfig
+    ability = default_abilities().get(args.brawler) if args.brawler else None
+    tick = 1.0 / max(0.1, args.fps)
+    combat = CombatPolicy(CombatConfig(tick_seconds=tick), ability=ability)
+    _DECISION.update(
+        combat=combat, tracker=EnemyTracker(),
+        brain=(TacticalBrain(TacticsConfig(tick_seconds=tick), ability=ability,
+                             combat=combat) if use_brain else None))
+    print(f"movement under --trace: {'tactical brain' if use_brain else 'policy'}"
+          f"{f' ({args.brawler})' if args.brawler else ''}")
+
+
 def _trace_decision(tracer, frame, live, state, result, tick,
-                    planner, camera, profiles, policy, calc):
+                    planner, camera, profiles, policy, calc, write: bool = True):
     """Run terrain + gas + planner on this frame and write one trace image.
 
     Mirrors what `rl/env.py` does per step, minus the executor — deliberately,
@@ -253,7 +285,7 @@ def _trace_decision(tracer, frame, live, state, result, tick,
     approximation of it.
     """
     import numpy as np
-    from rl.actions import decode_action
+    from rl.actions import decode_action, decode_goal
     from rl.env import encode_observation
 
     fh, fw = frame.shape[:2]
@@ -273,8 +305,15 @@ def _trace_decision(tracer, frame, live, state, result, tick,
 
     dx, dy, ok = camera.update(frame, rect)
     camera_delta = (dx, dy) if ok else (0.0, 0.0)
+    tracker = _DECISION.get("tracker")
+    if tracker is not None:
+        tracker.update(state, camera_delta)
+    brain = _DECISION.get("brain")
+    goal = brain.decide(state, planner, tracker) if brain is not None else None
 
-    if policy is not None:
+    if goal is not None:
+        action = [0, 0]
+    elif policy is not None:
         max_hp = calc._max_health or calc.config.default_max_health
         obs = encode_observation(state, max_hp, (fw, fh),
                                  planner_status=planner.status())
@@ -283,18 +322,17 @@ def _trace_decision(tracer, frame, live, state, result, tick,
     else:
         action = [int(np.random.randint(16)), int(np.random.randint(3))]
 
-    from rl.combat import CombatPolicy
-    global _COMBAT
-    try:
-        _COMBAT
-    except NameError:
-        _COMBAT = CombatPolicy()
-    combat = _COMBAT.decide(state, frame_size=(fw, fh), world=planner.world)
-    intent = decode_action(action, state=state, frame_size=(fw, fh), planner=planner,
-                           terrain=terrain, camera_delta=camera_delta, gas_grid=gas,
-                           combat=combat)
-    tracer.capture(frame, planner, state, intent=intent, reward=result,
-                   live=live, tick=tick, force=True)
+    combat = _DECISION["combat"].decide(state, frame_size=(fw, fh), world=planner.world,
+                                        tracker=tracker,
+                                        hint=getattr(goal, "hint", None))
+    kwargs = dict(state=state, frame_size=(fw, fh), planner=planner,
+                  terrain=terrain, camera_delta=camera_delta, gas_grid=gas,
+                  combat=combat)
+    intent = (decode_goal(goal, **kwargs) if goal is not None
+              else decode_action(action, **kwargs))
+    if write:
+        tracer.capture(frame, planner, state, intent=intent, reward=result,
+                       live=live, tick=tick, force=True)
 
 
 if __name__ == "__main__":

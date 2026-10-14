@@ -27,6 +27,7 @@ fork of the logic:
     RewardConfig(**{**asdict(base), **profile.reward_overrides})
     CombatConfig(**{**asdict(base), **profile.combat_overrides})
     PathPlannerConfig(**{**asdict(base), **profile.planner_overrides})
+    TacticsConfig(**{**asdict(base), **profile.tactics_overrides})
 
 Data, not code, for one reason: an override that only *tunes* an existing knob
 cannot introduce a behaviour the trace panel does not already display. A
@@ -72,11 +73,15 @@ class BrawlerProfile:
     reward_overrides: Dict[str, Any] = field(default_factory=dict)
     combat_overrides: Dict[str, Any] = field(default_factory=dict)
     planner_overrides: Dict[str, Any] = field(default_factory=dict)
+    # rl/tactics.TacticsConfig: standoff, retreat and engagement thresholds.
+    # The natural home for "Edgar closes, Piper keeps away" -- and the knobs
+    # sim/evaluate.py can measure per brawler before they ship.
+    tactics_overrides: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_default(self) -> bool:
         return not (self.reward_overrides or self.combat_overrides
-                    or self.planner_overrides)
+                    or self.planner_overrides or self.tactics_overrides)
 
     def to_dict(self) -> dict:
         return {
@@ -88,6 +93,7 @@ class BrawlerProfile:
             "reward_overrides": dict(self.reward_overrides),
             "combat_overrides": dict(self.combat_overrides),
             "planner_overrides": dict(self.planner_overrides),
+            "tactics_overrides": dict(self.tactics_overrides),
         }
 
 

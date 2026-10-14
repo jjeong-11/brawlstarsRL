@@ -283,14 +283,14 @@ class BrawlerRegistry:
                 print(f"[brawlers] no weights for {brawler_id} — random headings")
             return None, slot
         try:
-            try:
-                from sb3_contrib import RecurrentPPO as _Algo   # matches train.py
-            except Exception:
-                from stable_baselines3 import PPO as _Algo
-            # SB3 appends .zip itself and rejects the path if it is already there.
-            model = _Algo.load(str(slot.resolved.with_suffix("")))
+            # Whichever algorithm wrote it: the shipped base policy is plain
+            # PPO, while train.py writes RecurrentPPO when sb3-contrib is
+            # installed. Trying RecurrentPPO alone used to fail on the base
+            # file and silently drop every brawler to random headings.
+            from rl.checkpoints import load_policy
+            model, algo = load_policy(slot.resolved, device="cpu")
             if verbose:
-                print(f"[brawlers] {brawler_id}: loaded {slot.label}")
+                print(f"[brawlers] {brawler_id}: loaded {slot.label} ({algo})")
             return model, slot
         except Exception as e:
             # A shape mismatch here means the saved policy predates a change to

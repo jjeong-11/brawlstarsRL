@@ -31,8 +31,28 @@ CUBE_YELLOW_FRAC = 0.02
 # ---------------------------------------------------------------------------
 
 
+_CLOSE9 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+_OPEN5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+
+
+def cube_masks(hsv):
+    """The full-frame colour work of `find_ground_cubes`, separable from it.
+
+    Everything here depends on the frame alone -- not on the bar scan, not on
+    the anchor -- so `perception.liveLoop` runs it on a worker thread while
+    the anchor stage runs on the main one. Returns (green, yellow).
+    """
+    green_mask = cv2.inRange(hsv, CUBE_GREEN_LOWER, CUBE_GREEN_UPPER)
+    yellow_mask = cv2.inRange(hsv, CUBE_YELLOW_LOWER, CUBE_YELLOW_UPPER)
+    # Merge each cube's green faces (the bolt cuts through the middle of
+    # the sprite) without gluing distant blobs together.
+    green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, _CLOSE9)
+    green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, _OPEN5)
+    return green_mask, yellow_mask
+
+
 def find_ground_cubes(image: np.ndarray, exclude_positions=None,
-                      hsv=None, bars=None):
+                      hsv=None, bars=None, masks=None):
     """Finds power cubes lying on the ground.
 
     `exclude_positions` is an optional list of (x, y, radius) tuples --
@@ -68,22 +88,11 @@ def find_ground_cubes(image: np.ndarray, exclude_positions=None,
         exclude_positions.append(
             (bx + bw // 2, by + bh + int(0.65 * bw), max(20, int(0.75 * bw)))
         )
-    if hsv is None:
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-    green_mask = cv2.inRange(hsv, CUBE_GREEN_LOWER, CUBE_GREEN_UPPER)
-    yellow_mask = cv2.inRange(hsv, CUBE_YELLOW_LOWER, CUBE_YELLOW_UPPER)
-
-    # Merge each cube's green faces (the bolt cuts through the middle of
-    # the sprite) without gluing distant blobs together.
-    green_mask = cv2.morphologyEx(
-        green_mask, cv2.MORPH_CLOSE,
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
-    )
-    green_mask = cv2.morphologyEx(
-        green_mask, cv2.MORPH_OPEN,
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
-    )
+    if masks is None:
+        if hsv is None:
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        masks = cube_masks(hsv)
+    green_mask, yellow_mask = masks
 
     contours, _ = cv2.findContours(
         green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE

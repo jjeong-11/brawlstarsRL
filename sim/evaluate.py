@@ -84,9 +84,12 @@ def _play(args):
     if _PERCEPTION:
         pm = dataclasses.replace(pm, **_PERCEPTION)
     cc, tc = _configs(controller, combat_over, tactics_over, seed)
+    policy = None
+    if controller == "policy":
+        policy = _policy()
     t0 = time.time()
     r = run_match(controller, brawler, seed=seed, perception=pm, localize=localize,
-                  combat_config=cc, tactics_config=tc)
+                  combat_config=cc, tactics_config=tc, policy=policy)
     d = r.as_dict()
     d["wall_s"] = time.time() - t0
     d["label"] = label
@@ -122,11 +125,30 @@ def summarise(rows: List[dict]) -> Dict[str, float]:
 
 
 _PERCEPTION: dict = {}
+_POLICY_PATH = None
+_MODEL = None
 
 
-def _init_worker(perception):
-    global _PERCEPTION
+def _policy():
+    """A fresh PolicyStepper per match over a model loaded once per worker."""
+    global _MODEL
+    from rl.checkpoints import PolicyStepper, load_policy
+    if _MODEL is None:
+        if not _POLICY_PATH:
+            raise SystemExit("controller 'policy' needs --policy PATH")
+        _MODEL, _ = load_policy(_POLICY_PATH, device="cpu")
+    return PolicyStepper(_MODEL, deterministic=False)
+
+
+def _init_worker(perception, policy_path=None):
+    global _PERCEPTION, _POLICY_PATH
     _PERCEPTION = perception
+    _POLICY_PATH = policy_path
+    try:
+        import torch
+        torch.set_num_threads(1)        # one match per process already
+    except Exception:
+        pass
 
 
 def main(argv=None) -> int:
@@ -139,6 +161,9 @@ def main(argv=None) -> int:
     ap.add_argument("--perfect", action="store_true", help="no perception noise")
     ap.add_argument("--perception", default="", metavar="K=V,...",
                     help="PerceptionModel overrides, e.g. entity_interval_s=0.2")
+    ap.add_argument("--policy", default=None, metavar="PATH",
+                    help="checkpoint for the 'policy' controller, e.g. "
+                         "brawlstars_move.zip")
     ap.add_argument("--no-localize", action="store_true",
                     help="disable arena identification (faster, less realistic)")
     ap.add_argument("--json", default=None, help="write every match result here")
@@ -172,14 +197,14 @@ def main(argv=None) -> int:
         import multiprocessing as mp
         with mp.get_context("spawn").Pool(
                 args.workers, initializer=_init_worker,
-                initargs=(_parse_overrides(args.perception),)) as pool:
+                initargs=(_parse_overrides(args.perception), args.policy)) as pool:
             for k, d in enumerate(pool.imap_unordered(_play, jobs, chunksize=1)):
                 rows.append(d)
                 if (k + 1) % max(1, len(jobs) // 10) == 0:
                     print(f"  {k + 1}/{len(jobs)} matches ({time.time() - t0:.0f}s)",
                           flush=True)
     else:
-        _init_worker(_parse_overrides(args.perception))
+        _init_worker(_parse_overrides(args.perception), args.policy)
         for job in jobs:
             rows.append(_play(job))
 

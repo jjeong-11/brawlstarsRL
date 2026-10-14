@@ -77,10 +77,11 @@ class Intent:
     """
 
     __slots__ = ("move_label", "move", "fire_attack", "fire_super", "raw",
-                 "aim", "aim_frac", "aim_mode")
+                 "aim", "aim_frac", "aim_mode", "tactic", "target", "target_kind")
 
     def __init__(self, move_label, move, fire_attack, fire_super, raw,
-                 aim=None, aim_frac: float = 1.0, aim_mode: str = "auto"):
+                 aim=None, aim_frac: float = 1.0, aim_mode: str = "auto",
+                 tactic: Optional[str] = None, target=None, target_kind=None):
         self.move_label = move_label     # e.g. "NE/far" or "NE/far(committed)"
         self.move = move                 # (dx, dy) unit vector
         self.fire_attack = fire_attack   # bool
@@ -89,6 +90,13 @@ class Intent:
         self.aim = aim                   # (dx, dy) unit vector, or None = auto-aim
         self.aim_frac = aim_frac         # 0..1 of full deflection (lobbed range)
         self.aim_mode = aim_mode         # "auto" | "manual", for the trace
+        # rl/tactics.py's decision ("engage: target 4.5t"), or None when the
+        # policy chose the movement. Shown on the trace and in the web UI.
+        self.tactic = tactic
+        # What the gun was pointed at (frame px) and whether it was an enemy
+        # or a box -- so the trace can draw it and kill attribution can tell.
+        self.target = target
+        self.target_kind = target_kind
 
     def __repr__(self):
         parts = [self.move_label]
@@ -140,7 +148,55 @@ def decode_action(action, state=None, frame_size=(1280, 720),
         label += "(blocked)"
     return Intent(label, move, attack == 1, super_ == 1,
                   (heading, dist, attack, super_),
-                  aim=aim, aim_frac=aim_frac, aim_mode=aim_mode)
+                  aim=aim, aim_frac=aim_frac, aim_mode=aim_mode,
+                  target=getattr(combat, "target", None),
+                  target_kind=getattr(combat, "target_kind", None))
+
+
+def decode_goal(goal, state=None, frame_size=(1280, 720),
+                planner: Optional[WaypointPlanner] = None, terrain=None,
+                camera_delta=(0.0, 0.0), gas_grid=None,
+                combat=(False, False)) -> Intent:
+    """Turn an rl/tactics.Goal into an Intent, the way decode_action does a
+    policy action.
+
+    The movement comes from `WaypointPlanner.plan_goal` -- the same map, A*,
+    clearance and gas escape as the policy path, with the destination given
+    directly. `raw` still carries a (heading, distance) pair: the brain's
+    destination quantised to the policy's action space (`goal_to_action`), so
+    the action history in the observation stays meaningful and a run driven
+    by the brain doubles as behaviour-cloning data.
+    """
+    from .tactics import goal_to_action
+    attack, super_ = (1 if combat[0] else 0), (1 if combat[1] else 0)
+    planner = planner or WaypointPlanner()
+    point = getattr(goal, "point", None) if goal is not None else None
+    move = planner.plan_goal(point, state, frame_size, terrain=terrain,
+                             camera_delta=camera_delta, gas_grid=gas_grid,
+                             avoid=getattr(goal, "avoid", None),
+                             precise=bool(getattr(goal, "precise", False)),
+                             pull_in=getattr(goal, "pull_in", None))
+    status = planner.status()
+    w, h = frame_size
+    rect = planner.world.rect or (0, 0, w, h)
+    player = getattr(state, "player_pos", None) if state is not None else None
+    heading, dist = goal_to_action(point, player or (w / 2.0, h / 2.0), rect,
+                                   n_headings=N_HEADINGS,
+                                   distances=PathPlannerConfig().distances)
+    mode = getattr(goal, "mode", "goal") if goal is not None else "hold"
+    label = f"{mode}>{_COMPASS[heading]}/{_DIST_LABEL[dist]}" if point else f"{mode}>hold"
+    if status.escaping_gas:
+        label += "(GAS-ESCAPE)"
+    if status.blocked:
+        label += "(blocked)"
+    tactic = goal.label() if (goal is not None and hasattr(goal, "label")) else mode
+    return Intent(label, move, attack == 1, super_ == 1,
+                  (heading, dist, attack, super_),
+                  aim=getattr(combat, "aim", None),
+                  aim_frac=float(getattr(combat, "aim_frac", 1.0) or 1.0),
+                  aim_mode=str(getattr(combat, "mode", "auto") or "auto"),
+                  tactic=tactic, target=getattr(combat, "target", None),
+                  target_kind=getattr(combat, "target_kind", None))
 
 
 class ActionExecutor:
@@ -153,6 +209,17 @@ class ActionExecutor:
                                planner=planner, terrain=terrain,
                                camera_delta=camera_delta, gas_grid=gas_grid,
                                combat=combat)
+        self._execute(intent)
+        return intent
+
+    def apply_goal(self, goal, state=None, frame_size=(1280, 720), planner=None,
+                   terrain=None, camera_delta=(0.0, 0.0), gas_grid=None,
+                   combat=(False, False)) -> Intent:
+        """Like `apply`, for a destination chosen by rl/tactics.py."""
+        intent = decode_goal(goal, state=state, frame_size=frame_size,
+                             planner=planner, terrain=terrain,
+                             camera_delta=camera_delta, gas_grid=gas_grid,
+                             combat=combat)
         self._execute(intent)
         return intent
 
