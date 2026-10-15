@@ -121,6 +121,9 @@ class TacticsConfig:
     # fights need `early_engage_ratio`, avoiding a visible enemy outranks
     # collecting, and loot inside an enemy's reach is not worth the walk.
     early_players: int = 0
+    # Endgame: with players_left <= late_game_players the zone forces the
+    # fight anyway, so take it on our terms at this ratio. 0 = engage_ratio.
+    late_engage_ratio: float = 0.0
     early_engage_ratio: float = 1.6
     avoid_utility: float = 3.0
     # Keep at least this far (tiles) from an enemy we will not fight. 0 =
@@ -560,6 +563,9 @@ class TacticalBrain:
         if (cfg.early_players and (getattr(state, "players_left", None) or 10)
                 > cfg.early_players):
             need = max(need, cfg.early_engage_ratio)
+        if cfg.late_engage_ratio and (getattr(state, "players_left", None) or 10) \
+                <= cfg.late_game_players:
+            need = cfg.late_engage_ratio
         if ratio < need and not nearly_dead:
             return target, False, f"outmatched ({ratio:.2f})"
         if ammo_empty and not nearly_dead:
