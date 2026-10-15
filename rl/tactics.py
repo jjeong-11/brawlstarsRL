@@ -128,6 +128,10 @@ class TacticsConfig:
     # when `avoid_hidden` is on.
     avoid_radius_tiles: float = 11.0
     avoid_hidden: bool = False
+    # In the endgame (players_left <= late_game_players) the safe zone is too
+    # small to keep 11 tiles from everyone; insisting walks into the gas.
+    # 0 = use avoid_radius_tiles throughout.
+    late_avoid_radius_tiles: float = 0.0
     loot_threat_penalty: float = 1.0
 
     # --- bush camping ---------------------------------------------------- #
@@ -348,7 +352,10 @@ class TacticalBrain:
             cand["retreat"] = (2.4 + (cfg.reengage_hp - hp_frac), pt,
                                f"hp {hp_frac:.0%}, {len(threats)} threat(s)")
         else:
-            av_r = (cfg.avoid_radius_tiles or (cfg.enemy_range_tiles + 1.5)) * ppt
+            av_r = cfg.avoid_radius_tiles or (cfg.enemy_range_tiles + 1.5)
+            if cfg.late_avoid_radius_tiles and players_left <= cfg.late_game_players:
+                av_r = cfg.late_avoid_radius_tiles
+            av_r *= ppt
             dangers = [e for e in enemies if e["dist"] <= av_r and
                        (e["visible"] or cfg.avoid_hidden)]
             if not fight_ok and dangers:
