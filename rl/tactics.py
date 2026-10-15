@@ -108,6 +108,17 @@ class TacticsConfig:
     # More than this many enemies within threat radius is a third-party
     # waiting to happen; only a nearly dead target justifies staying.
     max_enemies_engaged: int = 1
+    # THIRD-PARTY. An enemy that is losing health while another enemy stands
+    # within `busy_tiles` of it is busy trading shots; both are spending HP on
+    # each other, and the kill drops cubes. Engage it at `busy_engage_ratio`
+    # (judged against the busy target alone, its duelling partner not counted
+    # as a crowd). 0 disables.
+    busy_engage_ratio: float = 0.0
+    busy_tiles: float = 7.0
+    # Retreat/avoid points closer than gas_margin_tiles to the gas lose this
+    # much score per tile: running from one enemy into the closing gas is how
+    # a lot of finals are lost. 0 = only the gas itself is penalised.
+    retreat_gas_weight: float = 0.0
     # COMMIT RATHER THAN RUN. A chasing enemy is as fast as you, so turning
     # your back on one already this close (tiles) just means being shot for
     # free. When the lone threat is within this distance and is not clearly
@@ -558,8 +569,17 @@ class TacticalBrain:
         target = min(visible, key=value)
         self._last_target = target["id"]
         ratio = our_eff / max(1.0, strength(target))
+        partner = None
+        if cfg.busy_engage_ratio and target["hurt"]:
+            tx, ty = target["pos"]
+            near = [e for e in visible if e["id"] != target["id"]
+                    and hypot(e["pos"][0] - tx, e["pos"][1] - ty) <= cfg.busy_tiles * ppt]
+            if near:
+                partner = min(near, key=lambda e: hypot(e["pos"][0] - tx, e["pos"][1] - ty))
         crowd = sum(1 for e in enemies
-                    if e["dist"] <= cfg.threat_radius_tiles * ppt and e["id"] != target["id"])
+                    if e["dist"] <= cfg.threat_radius_tiles * ppt
+                    and e["id"] != target["id"]
+                    and (partner is None or e["id"] != partner["id"]))
         nearly_dead = (target["hp_frac"] is not None and target["hp_frac"] < 0.3) or (
             target["hp"] is not None and target["hp"] < 0.25 * our_hp)
         ammo_empty = bool(getattr(state, "ammo_known", False)) and getattr(state, "ammo_count", 1) < 1
@@ -575,12 +595,15 @@ class TacticalBrain:
         if cfg.late_engage_ratio and (getattr(state, "players_left", None) or 10) \
                 <= cfg.late_game_players:
             need = cfg.late_engage_ratio
+        if partner is not None:
+            need = min(need, cfg.busy_engage_ratio)
         if ratio < need and not nearly_dead:
             return target, False, f"outmatched ({ratio:.2f})"
         if ammo_empty and not nearly_dead:
             return target, False, "reloading"
         return target, True, (f"target {target['dist'] / ppt:.1f}t "
-                              f"({'low' if nearly_dead else f'x{ratio:.1f}'})")
+                              f"({'low' if nearly_dead else f'x{ratio:.1f}'}"
+                              f"{', busy' if partner is not None else ''})")
 
     # ------------------------------------------------------------------ #
     # destinations
@@ -621,6 +644,7 @@ class TacticalBrain:
 
     def _retreat_point(self, world, planner, px, py, threats, zone, short, ppt) -> Point:
         """Somewhere far from every threat, behind a wall, out of the gas."""
+        cfg = self.config
         best, best_s = None, -1e9
         tpos = [t["pos"] for t in threats]
         for i in range(16):
@@ -637,6 +661,10 @@ class TacticalBrain:
                     s += 1.5 * self._bush_at(world, cx, cy)
                     s -= 8.0 * self._gas_at(world, cx, cy, dilated=planner)
                     s -= 2.0 * self._edge_risk(world, cx, cy)
+                    if cfg.retreat_gas_weight:
+                        gt = self._gas_tiles_at(world, cx, cy, ppt)
+                        if gt is not None and gt < cfg.gas_margin_tiles:
+                            s -= cfg.retreat_gas_weight * (cfg.gas_margin_tiles - gt)
                 if zone is not None:
                     zx, zy = zone
                     d0 = hypot(zx - px, zy - py)
