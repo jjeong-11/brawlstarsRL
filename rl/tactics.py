@@ -141,6 +141,9 @@ class TacticsConfig:
     # offer (0 disables); while hidden with an unfavourable enemy in view,
     # staying put and silent outranks running (`hidden_utility`).
     camp_utility: float = 0.9
+    # Camp only once at most this many players remain (0 = always): farm
+    # cubes while the lobby is spread out, hide once it gets crowded.
+    camp_max_players: int = 0
     hidden_utility: float = 2.2
     camp_radius_tiles: float = 9.0
     bush_see_tiles: float = 2.5
@@ -405,7 +408,8 @@ class TacticalBrain:
 
         # CAMP: hide in a bush, and stay hidden while it is working.
         in_bush = world is not None and world.ready() and self._bush_at(world, px, py) > 0.5
-        if cfg.camp_utility > 0:
+        if cfg.camp_utility > 0 and (not cfg.camp_max_players
+                                     or players_left <= cfg.camp_max_players):
             near_eyes = [e for e in enemies if e["visible"]
                          and e["dist"] <= cfg.bush_see_tiles * ppt]
             if in_bush and enemies and not near_eyes and not fight_ok and not in_gas \
