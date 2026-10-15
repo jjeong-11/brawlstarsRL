@@ -108,6 +108,32 @@ class TacticsConfig:
     # healthier than us (hp fraction no more than `commit_hp_margin` above
     # ours), fight it out instead of retreating. 0 disables.
     stand_and_fight_tiles: float = 0.0
+    # EARLY-GAME CAUTION. Placement is decided by the deaths you avoid, and
+    # measured in sim/ the losses cluster early: 18 of 42 fatal fights began
+    # in the first minute, mostly while engaging or grabbing a cube, against a
+    # killer carrying more cubes. While more than `early_players` remain,
+    # fights need `early_engage_ratio`, avoiding a visible enemy outranks
+    # collecting, and loot inside an enemy's reach is not worth the walk.
+    early_players: int = 0
+    early_engage_ratio: float = 1.6
+    avoid_utility: float = 1.5
+    # Keep at least this far (tiles) from an enemy we will not fight. 0 =
+    # enemy_range_tiles + 1.5. Remembered (bush-hidden) enemies count too
+    # when `avoid_hidden` is on.
+    avoid_radius_tiles: float = 0.0
+    avoid_hidden: bool = False
+    loot_threat_penalty: float = 0.0
+
+    # --- bush camping ---------------------------------------------------- #
+    # A brawler standing still in a bush is invisible beyond ~2 tiles, so it
+    # skips third-party fights and gets the first shot on whoever wanders in.
+    # `camp_utility` is the pull toward a safe bush when nothing better is on
+    # offer (0 disables); while hidden with an unfavourable enemy in view,
+    # staying put and silent outranks running (`hidden_utility`).
+    camp_utility: float = 0.0
+    hidden_utility: float = 2.2
+    camp_radius_tiles: float = 9.0
+    bush_see_tiles: float = 2.5
     commit_hp_margin: float = 0.15
 
     # --- gas ---------------------------------------------------------------- #
@@ -204,6 +230,17 @@ class TacticalBrain:
         if self.combat is not None and getattr(self.combat, "_tiles_across", None):
             across = self.combat._tiles_across
         return (w, h), short, span / max(1e-6, across)
+
+    def _loot_risk(self, pt, enemies, fight_ok, ppt) -> float:
+        """Penalty for loot that lies inside a visible enemy's likely reach."""
+        cfg = self.config
+        if not cfg.loot_threat_penalty or fight_ok or pt is None:
+            return 0.0
+        reach = (cfg.enemy_range_tiles + 0.5) * ppt
+        for e in enemies:
+            if e["visible"] and hypot(e["pos"][0] - pt[0], e["pos"][1] - pt[1]) <= reach:
+                return cfg.loot_threat_penalty
+        return 0.0
 
     def _long_range(self) -> bool:
         a = self.ability
@@ -304,11 +341,14 @@ class TacticalBrain:
             pt = self._retreat_point(world, planner, px, py, threats, zone, short, ppt)
             cand["retreat"] = (2.4 + (cfg.reengage_hp - hp_frac), pt,
                                f"hp {hp_frac:.0%}, {len(threats)} threat(s)")
-        elif target is not None and not fight_ok and target["dist"] <= (
-                cfg.enemy_range_tiles + 1.5) * ppt:
-            pt = self._retreat_point(world, planner, px, py, threats or [target],
-                                     zone, short, ppt)
-            cand["retreat"] = (1.5, pt, f"avoid: {why}")
+        else:
+            av_r = (cfg.avoid_radius_tiles or (cfg.enemy_range_tiles + 1.5)) * ppt
+            dangers = [e for e in enemies if e["dist"] <= av_r and
+                       (e["visible"] or cfg.avoid_hidden)]
+            if not fight_ok and dangers:
+                pt = self._retreat_point(world, planner, px, py, dangers, zone, short, ppt)
+                cand["retreat"] = (cfg.avoid_utility, pt,
+                                   f"avoid: {why or 'remembered threat'}")
 
         # HEAL: hurt, nobody around.
         if not threats and hp_frac < cfg.heal_hp:
@@ -334,6 +374,7 @@ class TacticalBrain:
                 if threats and hp_frac < 0.6:
                     u -= 0.6
                 u -= self._gas_penalty(world, cpos, ppt)
+                u -= self._loot_risk(cpos, enemies, fight_ok, ppt)
                 cand["cube"] = (u, cpos, f"cube {cd / ppt:.1f}t", cid)
 
         # COLLECT: a box to break.
@@ -346,7 +387,25 @@ class TacticalBrain:
                 u -= 0.35
             stand = self._box_point(world, px, py, bpos, reach)
             u -= self._gas_penalty(world, stand, ppt)
+            u -= self._loot_risk(stand, enemies, fight_ok, ppt)
             cand["box"] = (u, stand, f"box {bd / ppt:.1f}t", bid)
+
+        # CAMP: hide in a bush, and stay hidden while it is working.
+        in_bush = world is not None and world.ready() and self._bush_at(world, px, py) > 0.5
+        if cfg.camp_utility > 0:
+            near_eyes = [e for e in enemies if e["visible"]
+                         and e["dist"] <= cfg.bush_see_tiles * ppt]
+            if in_bush and enemies and not near_eyes and not fight_ok and not in_gas \
+                    and (gas_d is None or gas_d > cfg.gas_urgent_tiles):
+                cand["camp"] = (cfg.hidden_utility, None, "hidden in bush")
+            else:
+                bp = self._camp_point(world, px, py, zone, ppt, short)
+                if bp is not None:
+                    d = hypot(bp[0] - px, bp[1] - py) / ppt
+                    u = cfg.camp_utility - 0.03 * d
+                    if in_bush and d < 0.8:
+                        bp = None                 # already there: hold still
+                    cand["camp"] = (u, bp, f"bush {d:.1f}t")
 
         # ZONE: late game, hold the middle.
         if zone is not None and players_left <= cfg.late_game_players:
@@ -390,6 +449,10 @@ class TacticalBrain:
             hint = CombatHint(hold_fire=True, allow_boxes=False)
         elif best == "retreat":
             hint = CombatHint(hold_fire=False, allow_boxes=False)
+        elif best == "camp" and in_bush:
+            # Shooting reveals the position; a camper fires only when the
+            # engage mode says the fight is worth it.
+            hint = CombatHint(hold_fire=True, allow_boxes=False)
 
         g = Goal(point=point, mode=best, reason=reason, avoid=avoid,
                  precise=(best == "cube"), hint=hint, target_id=tid,
@@ -454,7 +517,11 @@ class TacticalBrain:
             return target, False, f"too hurt ({hp_frac:.0%})"
         if crowd >= cfg.max_enemies_engaged and not nearly_dead:
             return target, False, f"outnumbered ({crowd + 1})"
-        if ratio < self._engage_ratio() and not nearly_dead:
+        need = self._engage_ratio()
+        if (cfg.early_players and (getattr(state, "players_left", None) or 10)
+                > cfg.early_players):
+            need = max(need, cfg.early_engage_ratio)
+        if ratio < need and not nearly_dead:
             return target, False, f"outmatched ({ratio:.2f})"
         if ammo_empty and not nearly_dead:
             return target, False, "reloading"
@@ -547,6 +614,50 @@ class TacticalBrain:
         except Exception:
             pass
         return None
+
+    def _camp_point(self, world, px, py, zone, ppt, short) -> Optional[Point]:
+        """A bush cell to hide in: near, deep in cover, inward, clear of gas."""
+        if world is None or not world.ready():
+            return None
+        try:
+            cfg = self.config
+            cx0, cy0 = world.to_cell((px, py))
+            r = int(max(3, round(cfg.camp_radius_tiles * ppt / world.cell_size_px())))
+            gx0, gy0 = world.clamp_cell((cx0 - r, cy0 - r))
+            gx1, gy1 = world.clamp_cell((cx0 + r, cy0 + r))
+            bush = world.bush[gy0:gy1 + 1, gx0:gx1 + 1] > 0.5
+            if not bush.any():
+                return None
+            import cv2
+            # Depth of cover: how far inside the bush patch each cell is.
+            depth = cv2.distanceTransform(bush.astype(np.uint8), cv2.DIST_L2, 3)
+            occ = world.occupancy[gy0:gy1 + 1, gx0:gx1 + 1]
+            ys, xs = np.nonzero(bush & ~occ)
+            if not len(xs):
+                return None
+            gd = getattr(self, "_gas_dist", None)
+            cell_t = world.cell_size_px() / max(ppt, 1e-6)
+            best, best_s = None, -1e9
+            zx = zy = None
+            if zone is not None:
+                zx, zy = world.to_cell(zone)
+            for x, y in zip(xs.tolist(), ys.tolist()):
+                X, Y = x + gx0, y + gy0
+                s = 0.6 * min(float(depth[y, x]), 3.0)
+                s -= 0.08 * hypot(X - cx0, Y - cy0) * cell_t
+                if gd is not None:
+                    g = float(gd[Y, X]) * cell_t
+                    if g < cfg.gas_margin_tiles + 1.0:
+                        continue
+                if zx is not None:
+                    s -= 0.03 * hypot(X - zx, Y - zy) * cell_t
+                if s > best_s:
+                    best, best_s = (X, Y), s
+            if best is None:
+                return None
+            return world.to_pixels(best)
+        except Exception:
+            return None
 
     def _box_point(self, world, px, py, bpos, reach) -> Point:
         """Where to stand to shoot a box: in range, with a clear line."""
