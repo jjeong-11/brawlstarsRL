@@ -173,6 +173,11 @@ class TacticsConfig:
     # --- collection ----------------------------------------------------------- #
     # Stand this fraction of the reach away from a box while breaking it.
     box_standoff_frac: float = 0.70
+    # Box value: utility = box_utility - box_decay * distance_tiles. Cubes
+    # decide the endgame (measured in sim/: losing finalists held 2.6 cubes
+    # against their opponents' 7.3), so farming has to compete with camping.
+    box_utility: float = 1.0
+    box_decay: float = 0.035
     # Ground cubes further than this (tiles) are not worth a detour.
     cube_radius_tiles: float = 12.0
     # A box/cube goal that has been blocked this many ticks is abandoned for a
@@ -420,7 +425,7 @@ class TacticalBrain:
                                    getattr(state, "box_positions", ()))
         if box is not None:
             bpos, bid, bd = box
-            u = 1.0 - 0.035 * bd / ppt
+            u = cfg.box_utility - cfg.box_decay * bd / ppt
             if threats:
                 u -= 0.35
             stand = self._box_point(world, px, py, bpos, reach)
