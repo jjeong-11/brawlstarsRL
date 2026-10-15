@@ -75,10 +75,16 @@ class TacticsConfig:
     heal_hp: float = 0.62          # no threat around: stop and regen below this
 
     # --- engagement ------------------------------------------------------- #
+    # SURVIVAL FIRST. Placement is "how many are still alive when you die",
+    # so a fight is only worth it when it is nearly free. Measured in sim/
+    # (160 paired seeds, Shelly): refusing fights below 3x, avoiding enemies
+    # within 11 tiles, skipping contested loot and camping bushes took the
+    # mean place from 4.17 to 3.24 and top-3 from 51% to 70%.
+    #
     # Fight when our effective strength (hp x cube damage bonus) is at least
     # this multiple of the target's. Below 1 on purpose: the agent shoots
     # first more often than not, and unknown enemy HP is assumed full.
-    engage_ratio: float = 0.85
+    engage_ratio: float = 3.0
     # Ranged brawlers hold this fraction of their own reach from the target.
     standoff_frac: float = 0.80
     # Long-range brawlers (range >= 9 tiles, Marksman, Artillery) are fragile
@@ -116,13 +122,13 @@ class TacticsConfig:
     # collecting, and loot inside an enemy's reach is not worth the walk.
     early_players: int = 0
     early_engage_ratio: float = 1.6
-    avoid_utility: float = 1.5
+    avoid_utility: float = 3.0
     # Keep at least this far (tiles) from an enemy we will not fight. 0 =
     # enemy_range_tiles + 1.5. Remembered (bush-hidden) enemies count too
     # when `avoid_hidden` is on.
-    avoid_radius_tiles: float = 0.0
+    avoid_radius_tiles: float = 11.0
     avoid_hidden: bool = False
-    loot_threat_penalty: float = 0.0
+    loot_threat_penalty: float = 1.0
 
     # --- bush camping ---------------------------------------------------- #
     # A brawler standing still in a bush is invisible beyond ~2 tiles, so it
@@ -130,7 +136,7 @@ class TacticsConfig:
     # `camp_utility` is the pull toward a safe bush when nothing better is on
     # offer (0 disables); while hidden with an unfavourable enemy in view,
     # staying put and silent outranks running (`hidden_utility`).
-    camp_utility: float = 0.0
+    camp_utility: float = 0.9
     hidden_utility: float = 2.2
     camp_radius_tiles: float = 9.0
     bush_see_tiles: float = 2.5
