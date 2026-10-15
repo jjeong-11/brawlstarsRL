@@ -177,6 +177,10 @@ class TacticsConfig:
     # decide the endgame (measured in sim/: losing finalists held 2.6 cubes
     # against their opponents' 7.3), so farming has to compete with camping.
     box_utility: float = 1.0
+    # A cube on the floor is a box already broken: it must always outrank the
+    # next box, or the agent breaks a box and walks off to the next one while
+    # someone else picks up the cube (measured: more boxes, fewer cubes).
+    cube_utility: float = 1.6
     box_decay: float = 0.035
     # Ground cubes further than this (tiles) are not worth a detour.
     cube_radius_tiles: float = 12.0
@@ -413,7 +417,7 @@ class TacticalBrain:
         if cube is not None:
             cpos, cid, cd = cube
             if cd <= cfg.cube_radius_tiles * ppt:
-                u = 1.6 - 0.06 * cd / ppt
+                u = max(cfg.cube_utility, cfg.box_utility + 0.7) - 0.06 * cd / ppt
                 if threats and hp_frac < 0.6:
                     u -= 0.6
                 u -= self._gas_penalty(world, cpos, ppt)
