@@ -132,6 +132,12 @@ class TacticsConfig:
     # small to keep 11 tiles from everyone; insisting walks into the gas.
     # 0 = use avoid_radius_tiles throughout.
     late_avoid_radius_tiles: float = 0.0
+    # Zig-zag while fleeing: rotate the escape step by +/- this many degrees,
+    # flipping with the strafe timer. Opponents lead their shots from our
+    # velocity, so a straight retreat is the easiest target there is.
+    # 0 disables.
+    retreat_juke_deg: float = 0.0
+    retreat_juke_reach: float = 0.25          # of the short side
     loot_threat_penalty: float = 1.0
 
     # --- bush camping ---------------------------------------------------- #
@@ -254,6 +260,19 @@ class TacticalBrain:
             if e["visible"] and hypot(e["pos"][0] - pt[0], e["pos"][1] - pt[1]) <= reach:
                 return cfg.loot_threat_penalty
         return 0.0
+
+    def _juke(self, world, px, py, point, short) -> Point:
+        """A short escape step rotated off the escape direction (see
+        retreat_juke_deg); falls back to the plain point if it is not
+        standable."""
+        cfg = self.config
+        ang = atan2(point[1] - py, point[0] - px) + \
+            self._strafe_sign * cfg.retreat_juke_deg * pi / 180.0
+        r = cfg.retreat_juke_reach * short
+        q = (px + cos(ang) * r, py + sin(ang) * r)
+        if world is not None and world.ready() and not self._standable(world, q[0], q[1]):
+            return point
+        return q
 
     def _long_range(self) -> bool:
         a = self.ability
@@ -470,6 +489,9 @@ class TacticalBrain:
             # Shooting reveals the position; a camper fires only when the
             # engage mode says the fight is worth it.
             hint = CombatHint(hold_fire=True, allow_boxes=False)
+
+        if best == "retreat" and cfg.retreat_juke_deg and point is not None:
+            point = self._juke(world, px, py, point, short)
 
         g = Goal(point=point, mode=best, reason=reason, avoid=avoid,
                  precise=(best == "cube"), hint=hint, target_id=tid,
