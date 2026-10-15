@@ -119,6 +119,15 @@ class TacticsConfig:
     # much score per tile: running from one enemy into the closing gas is how
     # a lot of finals are lost. 0 = only the gas itself is penalised.
     retreat_gas_weight: float = 0.0
+    # Score bonus for keeping the previous gas-escape goal (see _gas_goal).
+    gas_goal_stick: float = 1.5
+    # Gas goal = nearest walkable ground this many tiles deeper than
+    # gas_margin_tiles (see _gas_goal_walk). 0 = ring search only.
+    gas_goal_depth_tiles: float = 2.0
+    gas_goal_max_cells: int = 9000
+    # After the planner's in-gas escape picked a refuge, keep walking to it
+    # for this many ticks after leaving the cloud. 0 = off.
+    gas_follow_escape_ticks: int = 30
     # COMMIT RATHER THAN RUN. A chasing enemy is as fast as you, so turning
     # your back on one already this close (tiles) just means being shot for
     # free. When the lone threat is within this distance and is not clearly
@@ -252,6 +261,7 @@ class TacticalBrain:
         self._strafe_sign = 1.0
         self._strafe_next = 0
         self._explore_heading: Optional[float] = None
+        self._gas_latch = None
         self._explore_until = 0
         self._zone_dir: Optional[Point] = None       # smoothed inward direction
         self._blacklist = {}                          # track id -> until tick
@@ -352,7 +362,11 @@ class TacticalBrain:
         threats = [e for e in enemies if e["dist"] <= threat_r]
 
         self._gas_dist = self._gas_distance_field(world)
+        self._planner = planner
         zone = self._zone_center(world, tracker, px, py)
+        if planner is not None:
+            planner.inward_hint = (_unit(zone[0] - px, zone[1] - py)
+                                   if zone is not None else None)
         gas_d = self._gas_distance_tiles(planner, world, px, py, ppt)
         in_gas = bool(getattr(state, "in_gas", False))
         players_left = getattr(state, "players_left", None) or 10
@@ -806,30 +820,128 @@ class TacticalBrain:
         """
         if world is None or not world.ready():
             return self._toward_zone(world, px, py, zone, short, ppt)
+        pl = getattr(self, "_planner", None)
+        if (self.config.gas_follow_escape_ticks and pl is not None
+                and getattr(pl, "escape_goal_cell", None) is not None
+                and world._stamp - pl.escape_stamp <= self.config.gas_follow_escape_ticks):
+            ex, ey = world.to_pixels(pl.escape_goal_cell)
+            if hypot(ex - px, ey - py) > 0.5 * ppt and self._gas_at(world, ex, ey) < 0.3:
+                return (ex, ey)
+        if self.config.gas_goal_depth_tiles > 0:
+            pt = self._gas_goal_walk(world, px, py, ppt, zone)
+            if pt is not None:
+                return pt
         za = None
         if zone is not None:
             za = atan2(zone[1] - py, zone[0] - px)
         best, best_s = None, -1e9
         cap = self.config.gas_margin_tiles + 3.0
+        cands = []
         for i in range(16):
             a = 2 * pi * i / 16
             run, _unseen, gassy = self._ray_run(world, px, py, a, 1.1 * short)
             for r in (0.45, 0.8, 1.1):
-                d = r * short
-                x, y = px + cos(a) * d, py + sin(a) * d
-                if not self._standable(world, x, y):
+                cands.append((a, r * short, run, gassy, 0.0))
+        # Commit to an escape route. Scores of very different directions are
+        # often within a hair of each other, and re-choosing every tick made
+        # the agent swing between routes in place until the gas killed it
+        # (most sim gas deaths). The previous goal, kept in map cells so it
+        # stays put while the camera moves, competes with a bonus.
+        latch = self._gas_latch
+        if latch is not None and self.tick - latch[1] <= 5 and self.config.gas_goal_stick:
+            lx, ly = world.to_pixels(latch[0])
+            d = hypot(lx - px, ly - py)
+            if d > 0.12 * short:
+                a = atan2(ly - py, lx - px)
+                run, _unseen, gassy = self._ray_run(world, px, py, a, d)
+                cands.append((a, d, run, gassy, self.config.gas_goal_stick))
+        for a, d, run, gassy, bonus in cands:
+            r = d / max(short, 1.0)
+            x, y = px + cos(a) * d, py + sin(a) * d
+            if not self._standable(world, x, y):
+                continue
+            gd = self._gas_tiles_at(world, x, y, ppt)
+            gd = cap if gd is None else min(gd, cap)
+            s = 1.0 * gd + bonus
+            s += 1.2 * min(run, d) / max(d, 1.0)     # reachable in a line?
+            s -= 3.0 * gassy if run < d else 0.0
+            if za is not None:
+                s += 2.0 * cos(a - za)
+            s -= 0.3 * r                               # nearer is quicker
+            if s > best_s:
+                best, best_s = (x, y), s
+        if best is None:
+            self._gas_latch = None
+            return self._toward_zone(world, px, py, zone, short, ppt)
+        self._gas_latch = (world.to_cell(best), self.tick)
+        return best
+
+    def _gas_goal_walk(self, world, px, py, ppt, zone=None) -> Optional[Point]:
+        """The nearest ground, by WALKING distance, that is deep in the safe
+        zone: at least gas_margin_tiles + gas_goal_depth_tiles from known gas.
+
+        Picking by straight-line reach (the ring search below) let routes of
+        very different length score the same, and the agent swung between a
+        goal three tiles away and one behind a long detour, in place, until
+        the gas reached it. A breadth-first walk over the map has one answer,
+        and it is the one the planner can actually follow.
+        """
+        gd = getattr(self, "_gas_dist", None)
+        if gd is None:
+            return None
+        cfg = self.config
+        occ = world.occupancy
+        clear = world.clearance()
+        tiles_per_cell = world.cell_size_px() / max(ppt, 1e-6)
+        want = (cfg.gas_margin_tiles + cfg.gas_goal_depth_tiles) / max(tiles_per_cell, 1e-6)
+        sx, sy = world.clamp_cell(world.to_cell((px, py)))
+        gh, gw = occ.shape
+        passable = ((~occ) & (clear >= 0.5)).ravel().tolist()
+        body = clear >= 0.9
+        if zone is not None:
+            # Ground the gas field calls deep can just be ground nobody has
+            # looked at lately (unseen cells default to free and gas memory
+            # fades). The cloud closes on the zone, so a refuge must lie on
+            # the zone side of us.
+            zx, zy = world.to_cell(zone)
+            hx, hy = _unit(zx - sx, zy - sy)
+            ys, xs = np.mgrid[0:gh, 0:gw]
+            body &= ((xs - sx) * hx + (ys - sy) * hy) > 0.0
+        unobs = world.gas_unobserved
+        ok = (body & ~unobs).ravel().tolist()
+        depth = gd.ravel().tolist()
+        from collections import deque
+        q = deque([((sx, sy), 0)])
+        seen = {(sx, sy)}
+        # Late in the match no ground is `want` deep; then the deepest ground
+        # in reach, with a small preference for nearer.
+        here = depth[sy * gw + sx]
+        best, best_s = None, here + 1.0 / max(tiles_per_cell, 1e-6)
+        budget = cfg.gas_goal_max_cells
+        while q and budget > 0:
+            budget -= 1
+            (x, y), steps = q.popleft()
+            i = y * gw + x
+            if ok[i]:
+                if depth[i] >= want:
+                    return world.to_pixels((x, y))
+                sc = depth[i] - 0.05 * steps
+                if sc > best_s:
+                    best, best_s = (x, y), sc
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1),
+                           (1, 1), (1, -1), (-1, 1), (-1, -1)):
+                nx, ny = x + dx, y + dy
+                if not (0 <= nx < gw and 0 <= ny < gh) or (nx, ny) in seen:
                     continue
-                gd = self._gas_tiles_at(world, x, y, ppt)
-                gd = cap if gd is None else min(gd, cap)
-                s = 1.0 * gd
-                s += 1.2 * min(run, d) / max(d, 1.0)     # reachable in a line?
-                s -= 3.0 * gassy if run < d else 0.0
-                if za is not None:
-                    s += 2.0 * cos(a - za)
-                s -= 0.3 * r                               # nearer is quicker
-                if s > best_s:
-                    best, best_s = (x, y), s
-        return best if best is not None else self._toward_zone(world, px, py, zone, short, ppt)
+                if not passable[ny * gw + nx]:
+                    continue
+                if dx and dy and not (passable[y * gw + nx] and passable[ny * gw + x]):
+                    continue
+                seen.add((nx, ny))
+                q.append(((nx, ny), steps + 1))
+        if best is not None:
+            return world.to_pixels(best)
+        return None
 
     def _toward_zone(self, world, px, py, zone, short, ppt) -> Point:
         """A step toward the safe-zone centre, or away from the nearest gas."""
