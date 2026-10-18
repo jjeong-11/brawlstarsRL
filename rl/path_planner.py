@@ -244,20 +244,6 @@ class PathPlannerConfig:
     # to walk is never mistaken for a wall. 0 disables.
     bump_ticks: int = 4
     bump_reach_cells: float = 1.6
-    # WEDGE DETECTOR. The bump sensor needs a CONSISTENT push, but an agent
-    # clipping a corner it believes it can pass slides and re-steers every
-    # tick, so the stick swings and no bump ever fires: measured in sim/,
-    # that is how most gas deaths happen (12% of all matches), with the agent
-    # parked against a wall corner for 10+ seconds. Here: commanded to move
-    # for `wedge_ticks` decisions with a net displacement under `wedge_frac`
-    # of the short side, the next few cells of the current path are marked as
-    # bumps and the route is re-planned round them. 0 disables.
-    # A* box padding (cells) for the one retry when the normal box cannot
-    # reach the goal; see _astar_with_relaxation. 0 = no retry.
-    wide_search_pad: int = 48
-    wedge_ticks: int = 15
-    wedge_frac: float = 0.06
-    wedge_path_cells: int = 3
 
     # --- direct-steering fallback (no map at all) ---
     candidate_headings: int = 24
@@ -322,18 +308,6 @@ class WaypointPlanner:
         self._push_for = 0
         self._push_dir = (0.0, 0.0)
         self.bumps = 0
-        self.wedges = 0
-        self._trail: List[Tuple[float, float]] = []
-        # Where the last gas escape was heading (map cells) and the world-map
-        # stamp it was computed at. The brain re-uses it as its gas goal so the
-        # escape (used while inside the cloud) and A* (used just outside it)
-        # agree on the destination instead of alternating at the edge.
-        self.escape_goal_cell: Optional[Tuple[int, int]] = None
-        self.escape_stamp: int = -10 ** 9
-        # Unit vector (cells) toward the safe zone, from whoever knows it (the
-        # tactical brain). Gas only ever closes inward, so an escape target
-        # behind us is ground whose "no gas" reading predates the cloud.
-        self.inward_hint: Optional[Tuple[float, float]] = None
         self._seen_shift = (self.world.shift[0], self.world.shift[1])
         # plan_goal(): the brain's requested destination (pixels at latch
         # time, kept in map cells) that the current waypoint was relocated
@@ -581,10 +555,6 @@ class WaypointPlanner:
         stuck = self._update_stuck(px, py, short, use_map)
         if self._bump(use_map):
             self.blocked = True
-        if goal_px is not None and self._wedged(use_map):
-            self.blocked = True
-        elif goal_px is None:
-            self._trail = []
         avoid = list(avoid or ())
 
         move = (0.0, 0.0)
@@ -682,9 +652,6 @@ class WaypointPlanner:
             self._last_player_cell = (self._last_player_cell[0] + dx,
                                       self._last_player_cell[1] + dy)
         self.path = [(c[0] + dx, c[1] + dy) for c in self.path]
-        if self.escape_goal_cell is not None:
-            self.escape_goal_cell = (self.escape_goal_cell[0] + dx,
-                                     self.escape_goal_cell[1] + dy)
         if self.localizer is not None:
             try:
                 self.localizer.shift(dx, dy)
@@ -744,42 +711,6 @@ class WaypointPlanner:
                 self._stuck_for = 0
         self._last_player_cell = cur
         return self._stuck_for >= cfg.stuck_ticks
-
-    def _wedged(self, use_map: bool) -> bool:
-        """Commanded to move for a while, yet nowhere near anywhere new."""
-        cfg = self.config
-        if not use_map or cfg.wedge_ticks <= 0 or self._last_player_cell is None:
-            self._trail = []
-            return False
-        if self._smoothed_move == (0.0, 0.0):
-            self._trail = []
-            return False
-        cur = self._last_player_cell
-        self._trail.append(cur)
-        if len(self._trail) < cfg.wedge_ticks:
-            return False
-        self._trail = self._trail[-cfg.wedge_ticks:]
-        limit = cfg.wedge_frac * self.world.screen_gh
-        if max(hypot(c[0] - cur[0], c[1] - cur[1]) for c in self._trail) >= limit:
-            return False
-        # Block the way we have been trying to go: the next cells of the
-        # route, and the cell ahead of the stick.
-        # (`path` holds sparse route vertices, so walk the first leg.)
-        dirs = [self._smoothed_move]
-        if len(self.path) > 1:
-            nx, ny = self.path[1][0] + 0.5 - cur[0], self.path[1][1] + 0.5 - cur[1]
-            if hypot(nx, ny) > 1e-6:
-                dirs.append(_unit(nx, ny))
-        marks = [(cur[0] + dx * (cfg.bump_reach_cells + k),
-                  cur[1] + dy * (cfg.bump_reach_cells + k))
-                 for dx, dy in dirs for k in range(max(1, cfg.wedge_path_cells))]
-        here = (int(np.floor(cur[0])), int(np.floor(cur[1])))
-        for c in marks:
-            if (int(np.floor(c[0])), int(np.floor(c[1]))) != here:
-                self.world.mark_bump(c)
-        self._trail = []
-        self.wedges += 1
-        return True
 
     def _bump(self, use_map: bool) -> bool:
         """Mark the cell ahead as an obstacle if we keep pushing into it.
@@ -1044,15 +975,6 @@ class WaypointPlanner:
         came2, reached2 = self._astar(relaxed, start, goal)
         if reached2 == goal or (reached is None and reached2 is not None):
             return came2, reached2, relaxed
-        # Neither reached it inside the search box. The fallback "closest node
-        # reached" is then usually the near side of the wall in the way, and
-        # the agent parks against it (measured in sim/: 10+ s wedged under a
-        # long wall with the gas closing, the real route a detour the box
-        # did not contain). Search once more with a much wider box.
-        if self.config.wide_search_pad > self._SEARCH_PAD:
-            came3, reached3 = self._astar(cost, start, goal, pad=self.config.wide_search_pad)
-            if reached3 == goal:
-                return came3, reached3, cost
         return came, reached, cost
 
     # Padding around the start/goal bounding box that A* may expand into, in
@@ -1064,11 +986,11 @@ class WaypointPlanner:
     # than that is one the commitment would time out on anyway.
     _SEARCH_PAD = 14
 
-    def _astar(self, cost, start, goal, pad=None):
+    def _astar(self, cost, start, goal):
         """Returns (came_from, best_node). Falls back to the closest node reached."""
         gh, gw = cost.shape
         # Bound the search to a box around start and goal (see _SEARCH_PAD).
-        pad = self._SEARCH_PAD if pad is None else int(pad)
+        pad = self._SEARCH_PAD
         bx0 = max(0, min(start[0], goal[0]) - pad)
         bx1 = min(gw - 1, max(start[0], goal[0]) + pad)
         by0 = max(0, min(start[1], goal[1]) - pad)
@@ -1195,17 +1117,6 @@ class WaypointPlanner:
         # the escape the long way through the cloud toward a guess.
         deep = (self._gas_field() < cfg.gas_safe_threshold) & free & (
             clear >= cfg.agent_radius_cells) & ~world.gas_unobserved
-        if self.inward_hint is not None:
-            # Gas only ever closes inward: a refuge behind us is ground whose
-            # "no gas" reading predates the cloud (seen_gas never expires).
-            # Measured in sim/: escapes ran outward, deeper into the cloud.
-            hx, hy = self.inward_hint
-            ys, xs = np.mgrid[0:gh, 0:gw]
-            ahead = ((xs - start[0]) * hx + (ys - start[1]) * hy) >= 0.0
-            if (deep & ahead).any():
-                deep &= ahead
-            if (safe & ahead).any():
-                safe = safe & ahead
 
         gw_ = gw
         flat = cost.ravel().tolist()
@@ -1252,8 +1163,6 @@ class WaypointPlanner:
 
         if goal is None:
             return None
-        self.escape_goal_cell = goal
-        self.escape_stamp = world._stamp
         path = _string_pull(_reconstruct(came, start, goal), cost)
         aim = self._lookahead_point(path, player_px,
                                     min(world.screen_gw, world.screen_gh)
