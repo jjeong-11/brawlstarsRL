@@ -121,7 +121,11 @@ class TacticsConfig:
     retreat_gas_weight: float = 0.0
     # Once the localiser has identified the arena, use its exact centre as
     # the zone (instead of the local inward estimate from the gas boundary).
-    zone_from_reference: bool = True
+    # OFF: measured in sim/ over 320 paired matches, the exact centre cost
+    # +0.125 mean rank against no lock, the inward estimate +0.013. Heading
+    # for the true middle walks into the crowd; the local estimate keeps the
+    # survival-first agent near the edge of the safe ground.
+    zone_from_reference: bool = False
     # ROUTE-AWARE GAS (needs the localiser's lock). The straight-line gas
     # distance says nothing about the WALK out: measured in sim/, 11 of 20
     # gas deaths were in pockets whose route to safe ground was 11-28 tiles

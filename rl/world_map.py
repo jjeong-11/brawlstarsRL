@@ -117,8 +117,9 @@ class WorldMapConfig:
 
     # What an identified arena (perception/localize.py) is used for. Unseen
     # cells can take the layout's walls instead of `occ_prior`, and the area
-    # outside the arena can be marked blocked. Measured in sim/ (480 paired
-    # matches): both on cost ~0.15 mean rank against no lock at all.
+    # outside the arena can be marked blocked. Measured in sim/ (320 paired
+    # matches): neutral (the lock's cost was the brain's use of the exact
+    # arena centre; see TacticsConfig.zone_from_reference).
     reference_fill_unseen: bool = True
     reference_bounds: bool = True
 
