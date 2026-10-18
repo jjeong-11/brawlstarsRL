@@ -401,10 +401,16 @@ class WorldMap:
         """
         gm = pose.game_map
         ref = gm.occupancy
+        try:
+            # The layout counts bushes as blocked; they are walkable cover.
+            from perception.mapdb import bush_mask
+            ref = np.asarray(ref, bool) & ~bush_mask(gm)
+        except Exception:
+            pass
         rh, rw = ref.shape
         ys, xs = np.mgrid[0:self.gh, 0:self.gw]
         mx = np.floor(pose.origin[0] + xs / pose.scale).astype(np.int32)
-        my = np.floor(pose.origin[1] + ys / pose.scale).astype(np.int32)
+        my = np.floor(pose.origin[1] + ys / getattr(pose, "sy", pose.scale)).astype(np.int32)
         inside = (mx >= 0) & (mx < rw) & (my >= 0) & (my < rh)
 
         # Off the edge of the arena is blocked, not unknown.
@@ -433,7 +439,8 @@ class WorldMap:
         # roll since then moved the arrays under it.
         sx0, sy0 = getattr(self, "_reference_shift", (0, 0))
         return ((rw / 2.0 - pose.origin[0]) * pose.scale + (self.shift[0] - sx0),
-                (rh / 2.0 - pose.origin[1]) * pose.scale + (self.shift[1] - sy0))
+                (rh / 2.0 - pose.origin[1]) * getattr(pose, "sy", pose.scale)
+                + (self.shift[1] - sy0))
 
     def clear_reference(self) -> None:
         self.reference_occ = None

@@ -704,29 +704,6 @@ def playable(game_map, bush=None) -> bool:
 
 
 def bush_mask(game_map) -> np.ndarray:
-    """Recover bush cells from the map render (mapdb counts them as blocked).
-
-    Bushes are drawn saturated green; walls, crates and water are not. Cells
-    already blocked in the layout whose pixels are mostly green are bushes.
-    """
-    import cv2
-    from perception.mapdb import MAPS_DIR
-    occ = np.asarray(game_map.occupancy, bool)
-    gh, gw = occ.shape
-    fn = MAPS_DIR / (game_map.name.replace(" ", "_") + "-Map.png")
-    if not fn.exists():
-        cand = [p for p in MAPS_DIR.glob("*.png")
-                if p.stem.replace("-Map", "").replace("_", " ") == game_map.name]
-        if not cand:
-            return np.zeros_like(occ)
-        fn = cand[0]
-    im = cv2.imread(str(fn), cv2.IMREAD_UNCHANGED)
-    if im is None:
-        return np.zeros_like(occ)
-    bgr = im[..., :3]
-    alpha = im[..., 3] if im.shape[2] == 4 else np.full(im.shape[:2], 255, np.uint8)
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    green = ((hsv[..., 0] >= 33) & (hsv[..., 0] <= 90) & (hsv[..., 1] >= 90)
-             & (hsv[..., 2] >= 60) & (alpha >= 128)).astype(np.float32)
-    frac = cv2.resize(green, (gw, gh), interpolation=cv2.INTER_AREA)
-    return occ & np.asarray(game_map.in_bounds, bool) & (frac > 0.5)
+    """Bush cells of a reference layout (see perception.mapdb.bush_mask)."""
+    from perception.mapdb import bush_mask as _bush_mask
+    return _bush_mask(game_map)

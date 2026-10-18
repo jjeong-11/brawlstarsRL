@@ -119,6 +119,23 @@ class TacticsConfig:
     # much score per tile: running from one enemy into the closing gas is how
     # a lot of finals are lost. 0 = only the gas itself is penalised.
     retreat_gas_weight: float = 0.0
+    # Once the localiser has identified the arena, use its exact centre as
+    # the zone (instead of the local inward estimate from the gas boundary).
+    zone_from_reference: bool = True
+    # ROUTE-AWARE GAS (needs the localiser's lock). The straight-line gas
+    # distance says nothing about the WALK out: measured in sim/, 11 of 20
+    # gas deaths were in pockets whose route to safe ground was 11-28 tiles
+    # when the gas arrived, and the agent only started moving 6-9 s before.
+    # With the arena centre known, the gas front's half-width and closing rate
+    # are measured, the walking route to ground `route_gas_depth_tiles`
+    # inside the front is found, and the agent leaves when walking it would
+    # take longer than the gas needs to arrive, minus `route_gas_buffer_s`.
+    route_gas: bool = False
+    route_gas_depth_tiles: float = 3.0
+    route_gas_buffer_s: float = 5.0
+    route_gas_every: int = 5               # ticks between route searches
+    walk_speed_tiles: float = 2.2          # if the ability does not say
+    gas_rate_prior: float = 0.25           # tiles/s the front closes, per side
     # COMMIT RATHER THAN RUN. A chasing enemy is as fast as you, so turning
     # your back on one already this close (tiles) just means being shot for
     # free. When the lone threat is within this distance and is not clearly
@@ -252,6 +269,8 @@ class TacticalBrain:
         self._strafe_sign = 1.0
         self._strafe_next = 0
         self._explore_heading: Optional[float] = None
+        self._gas_hist: list = []
+        self._route = None
         self._explore_until = 0
         self._zone_dir: Optional[Point] = None       # smoothed inward direction
         self._blacklist = {}                          # track id -> until tick
@@ -376,6 +395,13 @@ class TacticalBrain:
             cand["gas"] = (1.3 + 0.35 * (cfg.gas_margin_tiles - gas_d),
                            self._gas_goal(world, px, py, zone, short, ppt),
                            f"gas {gas_d:.1f}t away")
+
+        # ROUTE GAS: the walk out is longer than the time left.
+        rg = self._route_gas(world, px, py, ppt) if cfg.route_gas else None
+        if rg is not None:
+            u, pt, why = rg
+            if "gas" not in cand or cand["gas"][0] < u:
+                cand["gas"] = (u, pt, why)
 
         # Fight assessment against the best visible target.
         target, fight_ok, why = self._pick_target(state, enemies, hp_frac, ppt, reach)
@@ -831,6 +857,110 @@ class TacticalBrain:
                     best, best_s = (x, y), s
         return best if best is not None else self._toward_zone(world, px, py, zone, short, ppt)
 
+    def _route_gas(self, world, px, py, ppt):
+        """(utility, goal, reason) when the walk to safe ground is getting
+        longer than the time the gas leaves, else None. See `route_gas`."""
+        cfg = self.config
+        if world is None or not world.ready() or not getattr(world, "have_reference", False):
+            self._route = None
+            return None
+        cc = world.arena_center_cell()
+        if cc is None:
+            return None
+        cw, ch = world.cell
+        tx, ty = ppt / max(cw, 1e-6), ppt / max(ch, 1e-6)      # cells per tile
+        gh, gw = world.gas.shape
+        ys, xs = np.mgrid[0:gh, 0:gw]
+        cheb = np.maximum(np.abs(xs + 0.5 - cc[0]) / tx, np.abs(ys + 0.5 - cc[1]) / ty)
+        now = self.tick * cfg.tick_seconds
+
+        # The front's half-width: the nearest gas to the centre.
+        gassy = world.gas > 0.5
+        inb = getattr(world, "reference_in_bounds", None)
+        if inb is not None:
+            gassy &= inb
+        hist = self._gas_hist
+        if gassy.any():
+            h = float(cheb[gassy].min())
+            hist.append((now, h))
+            del hist[:-200]
+        elif hist:
+            h = hist[-1][1] - self._gas_rate() * (now - hist[-1][0])
+        else:
+            return None
+        rate = self._gas_rate()
+
+        c = world.clamp_cell(world.to_cell((px, py)))
+        depth = h - float(cheb[c[1], c[0]])
+        want = cfg.route_gas_depth_tiles
+        if depth >= want + 20.0 or h <= want:
+            return None
+
+        # Route search, refreshed every few ticks (kept in map cells).
+        r = self._route
+        if r is None or self.tick - r[2] >= cfg.route_gas_every \
+                or r[3] != (world.shift[0], world.shift[1]):
+            goal, length = self._walk_to_depth(world, c, cheb, h - want, tx, ty)
+            r = self._route = (goal, length, self.tick, (world.shift[0], world.shift[1]))
+        goal, length = r[0], r[1]
+        if goal is None or length is None or length < 1.0:
+            return None
+        speed = float(getattr(self.ability, "speed_tiles", None) or cfg.walk_speed_tiles)
+        t_walk = length / max(speed, 0.1)
+        t_gas = max(0.0, depth) / max(rate, 1e-3)
+        slack = t_gas - t_walk - cfg.route_gas_buffer_s
+        if slack > 0:
+            return None
+        u = 3.6 + min(2.0, -slack / 4.0)
+        return (u, world.to_pixels(goal),
+                f"route {length:.0f}t, gas in {t_gas:.0f}s")
+
+    def _gas_rate(self) -> float:
+        """Closing speed of the gas front (tiles/s per side), measured once
+        there is a history of it, else the prior."""
+        hist = self._gas_hist
+        cfg = self.config
+        if len(hist) >= 2 and hist[-1][0] - hist[0][0] >= 8.0:
+            (t0, h0), (t1, h1) = hist[0], hist[-1]
+            r = (h0 - h1) / max(t1 - t0, 1e-6)
+            if 0.03 <= r <= 2.0:
+                return r
+        return cfg.gas_rate_prior
+
+    def _walk_to_depth(self, world, start, cheb, limit, tx, ty):
+        """Shortest walk (tiles) from `start` to a cell with cheb <= limit."""
+        import heapq
+        occ = world.occupancy
+        clear = world.clearance()
+        gh, gw = occ.shape
+        passable = ((~occ) & (clear >= 0.5)).ravel().tolist()
+        target = ((cheb <= limit) & (clear >= 0.9)).ravel().tolist()
+        sx, sy = int(start[0]), int(start[1])
+        hx, hy, hd = 1.0 / tx, 1.0 / ty, (1.0 / tx ** 2 + 1.0 / ty ** 2) ** 0.5
+        steps = ((1, 0, hx), (-1, 0, hx), (0, 1, hy), (0, -1, hy),
+                 (1, 1, hd), (1, -1, hd), (-1, 1, hd), (-1, -1, hd))
+        dist = {(sx, sy): 0.0}
+        heap = [(0.0, sx, sy)]
+        budget = 12000
+        while heap and budget > 0:
+            d, x, y = heapq.heappop(heap)
+            if d > dist.get((x, y), 1e18):
+                continue
+            budget -= 1
+            if target[y * gw + x]:
+                return (x, y), d
+            for dx, dy, w in steps:
+                nx, ny = x + dx, y + dy
+                if not (0 <= nx < gw and 0 <= ny < gh) or not passable[ny * gw + nx]:
+                    continue
+                if dx and dy and not (passable[y * gw + nx] and passable[ny * gw + x]):
+                    continue
+                nd = d + w
+                if nd < dist.get((nx, ny), 1e18):
+                    dist[(nx, ny)] = nd
+                    heapq.heappush(heap, (nd, nx, ny))
+        return None, None
+
     def _toward_zone(self, world, px, py, zone, short, ppt) -> Point:
         """A step toward the safe-zone centre, or away from the nearest gas."""
         if zone is not None:
@@ -1052,10 +1182,12 @@ class TacticalBrain:
         """
         if world is None or not world.ready():
             return None
-        try:
-            cc = world.arena_center_cell()
-        except Exception:
-            cc = None
+        cc = None
+        if self.config.zone_from_reference:
+            try:
+                cc = world.arena_center_cell()
+            except Exception:
+                cc = None
         if cc is not None:
             return world.to_pixels((cc[0] - 0.5, cc[1] - 0.5))
         d = self._inward_dir(world, px, py)

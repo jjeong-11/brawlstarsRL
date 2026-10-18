@@ -674,7 +674,8 @@ class WaypointPlanner:
                        camera_delta[1] / max(ch, 1e-6))
         try:
             pose = self.localizer.update(self.world.occ_p > self.world.config.occ_threshold,
-                                         self.world.seen > 0.15, delta_cells)
+                                         self.world.seen > 0.15, delta_cells,
+                                         aspect=cw / max(ch, 1e-6))
         except Exception:
             return
         if pose is None:

@@ -197,25 +197,65 @@ class Pose:
     # Map-cell coordinate of the live grid's top-left corner. Fractional: the
     # camera does not move in whole cells.
     origin: Tuple[float, float]
-    scale: float          # live cells per map cell
+    scale: float          # live cells per map cell, horizontally
     confidence: float
     tracked: bool = False   # False = found by full search, True = incremental
+    # Live cells per map cell VERTICALLY. Live cells are not square: the
+    # 48x27 grid over a 2424x1080 screen makes them 50.5x40 px, so one map
+    # tile spans ~26% more cells down than across. None = same as `scale`.
+    scale_y: Optional[float] = None
+
+    @property
+    def sy(self) -> float:
+        return self.scale if self.scale_y is None else self.scale_y
 
     def to_map_cell(self, live_cell) -> Tuple[float, float]:
         return (self.origin[0] + live_cell[0] / self.scale,
-                self.origin[1] + live_cell[1] / self.scale)
+                self.origin[1] + live_cell[1] / self.sy)
 
     def to_live_cell(self, map_cell) -> Tuple[float, float]:
         return ((map_cell[0] - self.origin[0]) * self.scale,
-                (map_cell[1] - self.origin[1]) * self.scale)
+                (map_cell[1] - self.origin[1]) * self.sy)
 
 
-def _resample(grid: np.ndarray, scale: float) -> np.ndarray:
+def _resample(grid: np.ndarray, scale: float, scale_y: Optional[float] = None) -> np.ndarray:
     """Live occupancy -> reference-map cell scale, as float 0..1."""
     gh, gw = grid.shape
-    tw, th = max(2, int(round(gw / scale))), max(2, int(round(gh / scale)))
+    sy = scale if scale_y is None else scale_y
+    tw, th = max(2, int(round(gw / scale))), max(2, int(round(gh / sy)))
     return cv2.resize(grid.astype(np.float32), (tw, th),
                       interpolation=cv2.INTER_AREA)
+
+
+_WALLS = {}
+# Blocked margin added round every layout before matching, in map cells. The
+# camera sees ~8 tiles past the arena border, and players spawn near it, so the
+# explored patch routinely extends beyond the layout array -- and
+# matchTemplate cannot place a template that does not fit inside the image.
+# Off the arena is blocked in the live grid too, so a blocked margin is exact.
+_PAD = 10
+
+
+def _walls(gm: GameMap) -> np.ndarray:
+    """The layout's WALLS as float32: occupancy without bushes.
+
+    The layout counts bushes as blocked, but the live grid (getTerrain, and
+    the simulator) reads them as walkable floor. Matching against the raw
+    layout therefore compared different things on every bushy arena --
+    measured in sim/: at the true scale the right map scored 0.33-0.55 and
+    ranked anywhere from 1st to 70th, and only 2 of 40 matches ever locked.
+    """
+    w = _WALLS.get(gm.name)
+    if w is None:
+        occ = np.asarray(gm.occupancy, bool)
+        try:
+            from .mapdb import bush_mask
+            occ = occ & ~bush_mask(gm)
+        except Exception:
+            pass
+        w = np.pad(occ.astype(np.float32), _PAD, constant_values=1.0)
+        _WALLS[gm.name] = w
+    return w
 
 
 def _match(patch: np.ndarray, reference: np.ndarray):
@@ -254,6 +294,9 @@ class Localizer:
         self._next_attempt_at = self.config.attempt_every
         self._interval = self.config.attempt_every
         self._area_at_last_attempt = 0
+        # Vertical / horizontal live cells per map cell (= cell width / cell
+        # height in pixels). Set by `update`; a device constant.
+        self.aspect = getattr(self, "aspect", 1.0)
 
     def shift(self, dx_cells: float, dy_cells: float) -> None:
         """The caller's array was ROLLED by (dx, dy) live cells.
@@ -269,8 +312,9 @@ class Localizer:
         p = self.pose
         self.pose = Pose(game_map=p.game_map,
                          origin=(p.origin[0] - dx_cells / p.scale,
-                                 p.origin[1] - dy_cells / p.scale),
-                         scale=p.scale, confidence=p.confidence, tracked=p.tracked)
+                                 p.origin[1] - dy_cells / p.sy),
+                         scale=p.scale, confidence=p.confidence, tracked=p.tracked,
+                         scale_y=p.scale_y)
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -296,7 +340,7 @@ class Localizer:
         return patch, (x0, y0)
 
     def update(self, occupancy: np.ndarray, seen: np.ndarray,
-               camera_delta_cells=(0.0, 0.0)) -> Optional[Pose]:
+               camera_delta_cells=(0.0, 0.0), aspect: Optional[float] = None) -> Optional[Pose]:
         """Accumulated occupancy + observation mask -> a pose, or None.
 
         Both arrays are in LIVE grid cells and must share a coordinate frame —
@@ -309,6 +353,8 @@ class Localizer:
         """
         if occupancy is None or not len(self.db):
             return self.pose
+        if aspect is not None and aspect > 0 and self.pose is None:
+            self.aspect = float(aspect)
         self._calls += 1
         patch, offset = self._explored_patch(occupancy, seen)
         if patch is None:
@@ -359,7 +405,7 @@ class Localizer:
         best_overall = None
 
         for scale in cfg.scales:
-            resampled = _resample(patch, scale)
+            resampled = _resample(patch, scale, scale * self.aspect)
             side = min(resampled.shape)
             self.explored_cells = max(self.explored_cells, float(side))
             # REFUSE rather than guess. Below the measured threshold the winner
@@ -369,7 +415,7 @@ class Localizer:
                 continue
             scored = []
             for gm in self.db:
-                score, x, y = _match(resampled, gm.occupancy.astype(np.float32))
+                score, x, y = _match(resampled, _walls(gm))
                 scored.append((score, gm, x, y))
             scored.sort(key=lambda t: -t[0])
             top, runner_up = scored[0], (scored[1][0] if len(scored) > 1 else -1.0)
@@ -406,10 +452,12 @@ class Localizer:
             return None
 
         # `origin` is relative to the caller's full array, not the crop.
+        sy = scale * self.aspect
         self.pose = Pose(game_map=gm,
-                         origin=(float(x) - offset[0] / scale,
-                                 float(y) - offset[1] / scale),
-                         scale=scale, confidence=total / count, tracked=False)
+                         origin=(float(x - _PAD) - offset[0] / scale,
+                                 float(y - _PAD) - offset[1] / sy),
+                         scale=scale, confidence=total / count, tracked=False,
+                         scale_y=sy)
         return self.pose
 
     # ------------------------------------------------------------------ #
@@ -418,22 +466,23 @@ class Localizer:
         cfg = self.config
         pose = self.pose
         gm = pose.game_map
-        scale = pose.scale
+        scale, sy = pose.scale, pose.sy
 
         # The viewport moved opposite to the world's scroll, in map cells.
         pred = (pose.origin[0] - camera_delta_cells[0] / scale + offset[0] / scale,
-                pose.origin[1] - camera_delta_cells[1] / scale + offset[1] / scale)
+                pose.origin[1] - camera_delta_cells[1] / sy + offset[1] / sy)
 
-        patch = _resample(patch_in, scale)
+        patch = _resample(patch_in, scale, sy)
         ph, pw = patch.shape
-        ref = gm.occupancy.astype(np.float32)
+        ref = _walls(gm)
         rh, rw = ref.shape
 
         r = cfg.track_radius
-        x0 = int(np.clip(round(pred[0]) - r, 0, max(0, rw - pw)))
-        y0 = int(np.clip(round(pred[1]) - r, 0, max(0, rh - ph)))
-        x1 = int(np.clip(round(pred[0]) + r + pw, pw, rw))
-        y1 = int(np.clip(round(pred[1]) + r + ph, ph, rh))
+        qx, qy = pred[0] + _PAD, pred[1] + _PAD      # padded-array coordinates
+        x0 = int(np.clip(round(qx) - r, 0, max(0, rw - pw)))
+        y0 = int(np.clip(round(qy) - r, 0, max(0, rh - ph)))
+        x1 = int(np.clip(round(qx) + r + pw, pw, rw))
+        y1 = int(np.clip(round(qy) + r + ph, ph, rh))
         window = ref[y0:y1, x0:x1]
 
         score, dx, dy = _match(patch, window)
@@ -447,14 +496,14 @@ class Localizer:
             # Coast on dead reckoning: the camera delta is still trustworthy
             # even when this frame's segmentation is not.
             self.pose = Pose(gm, (pred[0] - offset[0] / scale,
-                                  pred[1] - offset[1] / scale),
-                             scale, score, tracked=True)
+                                  pred[1] - offset[1] / sy),
+                             scale, score, tracked=True, scale_y=pose.scale_y)
             return self.pose
 
         self._low_confidence_for = 0
-        self.pose = Pose(gm, (float(x0 + dx) - offset[0] / scale,
-                              float(y0 + dy) - offset[1] / scale),
-                         scale, score, tracked=True)
+        self.pose = Pose(gm, (float(x0 + dx - _PAD) - offset[0] / scale,
+                              float(y0 + dy - _PAD) - offset[1] / sy),
+                         scale, score, tracked=True, scale_y=pose.scale_y)
         return self.pose
 
     # ------------------------------------------------------------------ #
@@ -503,7 +552,7 @@ if __name__ == "__main__":
         ok = refused = wrong = trials = 0
 
         for gm in list(db)[:16]:
-            ref = gm.occupancy
+            ref = _walls(gm)[_PAD:-_PAD, _PAD:-_PAD] > 0.5   # live grids read bushes as floor
             rh, rw = ref.shape
             # An explored region a bit past the 12-cell threshold, i.e. what a
             # WorldMap holds after a few seconds of walking.

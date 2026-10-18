@@ -116,6 +116,50 @@ class GameMap:
 
 
 # --------------------------------------------------------------------------- #
+_BUSH_CACHE: Dict[str, np.ndarray] = {}
+
+
+def bush_mask(game_map) -> np.ndarray:
+    """Cached `_bush_mask`: the render is read once per arena per process."""
+    m = _BUSH_CACHE.get(game_map.name)
+    if m is None:
+        m = _bush_mask(game_map)
+        _BUSH_CACHE[game_map.name] = m
+    return m
+
+
+def _bush_mask(game_map) -> np.ndarray:
+    """Recover bush cells from the map render (the layout counts them as blocked).
+
+    Live perception reads bushes as walkable ground, so anything matching the
+    live grid against a layout (perception/localize.py) wants walls only:
+    `occupancy & ~bush_mask(gm)`. Also used by the simulator.
+
+    Bushes are drawn saturated green; walls, crates and water are not. Cells
+    already blocked in the layout whose pixels are mostly green are bushes.
+    """
+    occ = np.asarray(game_map.occupancy, bool)
+    gh, gw = occ.shape
+    fn = MAPS_DIR / (game_map.name.replace(" ", "_") + "-Map.png")
+    if not fn.exists():
+        cand = [p for p in MAPS_DIR.glob("*.png")
+                if p.stem.replace("-Map", "").replace("_", " ") == game_map.name]
+        if not cand:
+            return np.zeros_like(occ)
+        fn = cand[0]
+    im = cv2.imread(str(fn), cv2.IMREAD_UNCHANGED)
+    if im is None:
+        return np.zeros_like(occ)
+    bgr = im[..., :3]
+    alpha = im[..., 3] if im.shape[2] == 4 else np.full(im.shape[:2], 255, np.uint8)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    green = ((hsv[..., 0] >= 33) & (hsv[..., 0] <= 90) & (hsv[..., 1] >= 90)
+             & (hsv[..., 2] >= 60) & (alpha >= 128)).astype(np.float32)
+    frac = cv2.resize(green, (gw, gh), interpolation=cv2.INTER_AREA)
+    return occ & np.asarray(game_map.in_bounds, bool) & (frac > 0.5)
+
+
+# --------------------------------------------------------------------------- #
 def _colour_candidates(bgr: np.ndarray, mask: np.ndarray, top: int = 6):
     """The `top` most common colours among masked pixels, coarsely binned.
 
