@@ -115,6 +115,13 @@ class WorldMapConfig:
     # another brawler, a lag spike) does not wall off a corridor for good.
     bump_decay: float = 0.985
 
+    # What an identified arena (perception/localize.py) is used for. Unseen
+    # cells can take the layout's walls instead of `occ_prior`, and the area
+    # outside the arena can be marked blocked. Measured in sim/ (480 paired
+    # matches): both on cost ~0.15 mean rank against no lock at all.
+    reference_fill_unseen: bool = True
+    reference_bounds: bool = True
+
 
 class WorldMap:
     """Fused occupancy + gas over a window of the world, in grid cells.
@@ -470,7 +477,8 @@ class WorldMap:
         """
         def build():
             occ = self.occ_p > self.config.occ_threshold
-            if self.have_reference and self.reference_occ is not None:
+            if (self.have_reference and self.reference_occ is not None
+                    and self.config.reference_fill_unseen):
                 unseen = self.seen < 0.15
                 occ = np.where(unseen, self.reference_occ, occ)
             if self._has_bumps:
@@ -492,7 +500,8 @@ class WorldMap:
     def out_of_bounds(self) -> np.ndarray:
         """Cells outside the arena. All False without a reference map."""
         def build():
-            if self.have_reference and self.reference_in_bounds is not None:
+            if (self.have_reference and self.reference_in_bounds is not None
+                    and self.config.reference_bounds):
                 return ~self.reference_in_bounds
             return np.zeros((self.gh, self.gw), bool)
         return self._cached("out_of_bounds", build)
