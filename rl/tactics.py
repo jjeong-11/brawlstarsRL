@@ -200,7 +200,11 @@ class TacticsConfig:
     # Goals for other modes this close to gas (tiles) are not worth it.
     gas_goal_margin_tiles: float = 1.5
     # Late game: hold near the zone centre when this few players remain.
-    late_game_players: int = 4
+    # 0 = never. Measured in sim/ (paired, 640 matches): pulling to the middle
+    # from 6 players left +0.10 mean rank, from 4 (the old default) baseline,
+    # from 2 -0.09, never -0.10 and -0.03 on two seed sets. The middle is
+    # where the survivors meet; the gas mode alone keeps the agent inside.
+    late_game_players: int = 0
 
     # --- collection ----------------------------------------------------------- #
     # Stand this fraction of the reach away from a box while breaking it.

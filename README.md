@@ -736,14 +736,30 @@ python scripts/train_rl.py --sim --brawler piper                                
 python -m sim.gym_env collect --episodes 200 --out bc_sim.npz                     # BC from the brain
 ```
 
-Last measured (96 paired seeds, Shelly, after the corner fix):
+Current defaults (Shelly, noisy perception, 640 matches on seeds 3000-3319
+and 7000-7319): **mean place ~3.4, ~20% wins, ~65% top 3**. Earlier builds,
+for scale: 4.42 (96 seeds, first tactical brain), random headings ~5.1, the
+old bot ~5.8. At 160 matches one standard error is ~0.19 places, so only
+paired comparisons on 320+ seeds separate changes of ~0.1 -- use
+`python -m sim.search` (random search with held-out validation) or paired
+arms rather than eyeballing one run.
 
-| controller | wins | top 3 | mean rank |
-|---|---|---|---|
-| tactical brain | 16% | 46% | 4.42 |
-| shipped `brawlstars_move.zip` | 2% | 41% | 4.89 |
-| random headings | 7% | 35% | 5.11 |
-| old bot (legacy combat) | 4% | 25% | 5.84 |
+What the last rounds established:
+
+| change | effect (paired) |
+|---|---|
+| survival-first defaults (avoid visible enemies, camp in bushes, high engage ratio) | 4.17 -> ~3.24 |
+| random search over 13 TacticsConfig knobs (24 candidates, 320-seed validation) | nothing beat the defaults: tuning has plateaued |
+| localiser fixes (non-square cells, walls-only layouts, padded border) | locks 2/40 -> 23/40 matches, 0 wrong maps, ~0.5 tile error |
+| using the identified arena's exact centre as the zone | +0.125 worse, so off (`zone_from_reference=False`) |
+| endgame "hold the middle" mode | worse the earlier it starts; now off (`late_game_players=0`), ~-0.06 |
+| third-party engage, gas-aware retreat, gas-goal latching / BFS, wedge detector | no measurable gain; reverted or left off |
+
+Remaining losses: ~11% of matches end in a pure gas death. About half are
+the agent wedged or dithering 2-4 tiles from safety; the rest are pockets
+whose walk out is 11-28 tiles when the gas arrives (a route-aware trigger,
+`route_gas`, exists but needs a gas-timing prior to fire in time). The rest
+of the lost places are enemy kills, mostly of an agent with far fewer cubes.
 
 **Behaviour cloning from the brain does NOT work yet.** 81k demonstration
 samples (100 episodes) trained to 1.18 nats, but the cloned policy scored mean
