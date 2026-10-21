@@ -94,7 +94,7 @@ pro footage --(camera-motion IDM, HUD reads, "show taps")--> (state features, ac
 |---|---|---|
 | 1a | `tools/label_footage.py`: per-frame movement from camera motion, attack/super from HUD changes; "Show taps" reading still to do | **done (synthetic)** |
 | 1b | `rl/scrcpy_video.py`: scrcpy H.264 capture (PyAV), latest-frame only; target < 80 ms frame age | **done; untested on a phone** |
-| 1c | `sim/imitate.py`: decision-layer imitation from movement alone, validated in the sim | **partial** (see below) |
+| 1c | `sim/imitate.py`: decision-layer imitation from movement alone, validated in the sim | **done: exit criterion met** |
 | 1d | Learned detector (YOLO to ONNX) trained on frames auto-labelled by the current perception, then corrected by hand; replaces the HSV profiles | next |
 
 **Exit criteria:**
@@ -119,19 +119,26 @@ pro footage --(camera-motion IDM, HUD reads, "show taps")--> (state features, ac
   0.618 for the best other, 0.537 for the defaults). Agreement falls with
   parameter distance from the truth (Spearman -0.71). So movement alone does
   carry the signal.
-- **1c, blind fit:** a random-then-local search that never sees the truth
-  recovered `camp_utility` (1% of range off), `engage_ratio` (14%) and
-  `box_utility` (21%), but not the avoid/retreat settings (45-75% off). The
-  fitted policy places 3.59 against the demonstrator's 3.92, the same as the
-  defaults (3.60). **This misses the 0.2 exit criterion.**
-- **Next for 1c:**
-  - Weight ticks by how much the candidates disagree. Avoid and retreat only
-    matter when an enemy is visible but not worth fighting, and those ticks
-    are drowned out by easy agreement while exploring.
-  - Add shorter-horizon labels.
-  - Replace the random search with CMA-ES.
-  - Score play-level statistics (fight rate, time near enemies, cubes) in
-    addition to per-tick agreement.
+- **1c, first blind fit (every tick weighted equally):**
+  - Recovered `camp_utility`, `engage_ratio` and `box_utility`, but missed
+    the avoid and retreat settings by 45-75% of their range.
+  - The fitted policy placed 3.59 against the demonstrator's 3.92. Missed.
+- **1c, second blind fit (ticks weighted by candidate disagreement):**
+  - Weighting focuses the score on moments where settings actually change
+    behaviour; leaders are re-scored each round.
+  - Distance to the true settings went from 0.46 to 0.20. Five of six
+    settings landed within 14% of their range: avoid 0%, camp 3%, engage 5%,
+    retreat 7%, avoid radius 14%. `box_utility` is still 45% off.
+  - Held-out agreement: truth 0.618, fitted 0.584, defaults 0.530.
+  - **Play level, same 160 matches: demonstrator 3.71, fitted 3.73.** Wins
+    19% / 18%, kills 0.7 / 0.8, cubes 4.0 / 4.4, survival 102 s / 102 s.
+    That meets the 0.2 exit criterion.
+- **What that does and does not show:** movement alone, as footage gives
+  it, is enough to recover how a TacticalBrain-shaped player plays. A human
+  is not shaped like the brain. The Phase 2 test is whether a fit to pro
+  footage beats the hand-tuned policy, and the ranking scorer
+  (`python -m sim.imitate`, without `--fit`) reports how much agreement any
+  settings leave unexplained.
 
 ### Phase 2: learn from the pros
 - Run the labeller and perception over the footage to get (features, action)
