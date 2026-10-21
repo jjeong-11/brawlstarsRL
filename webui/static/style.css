@@ -266,9 +266,11 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .more { margin-top: 1.05rem; border-top: 1px solid var(--hairline); padding-top: .7rem; }
 .more summary {
   cursor: pointer; list-style: none;
-  font-size: .75rem; font-weight: 600; letter-spacing: .05em;
-  text-transform: uppercase; color: var(--text-3);
+  font-size: .8125rem; font-weight: 650; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--text);
+  padding: .35rem 0;
 }
+.more summary:hover { color: var(--accent); }
 .more summary::-webkit-details-marker { display: none; }
 .more summary::after { content: " ▸"; }
 .more[open] summary::after { content: " ▾"; }

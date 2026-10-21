@@ -799,6 +799,23 @@ for manual aimers, `rl/checkpoints.py` loader. Tests: `tests/test_tactics.py`,
 add enemy HP / tracked threats / gas distance to the observation, then retry BC and PPO in `--sim`; verify `tiles_across_screen`
 on the device.
 
+### Running on the phone: what changed after the first real-device test
+
+- **Ammo spam fixed.** At the web UI's 4 ticks/s the 0.3 s shot gap rounded
+  to one tick, so the bot fired every tick, and the ammo bar is rarely
+  readable on a phone, so nothing else stopped it. The gap now rounds up, and
+  `CombatPolicy` keeps its own clip count (3 rounds, one back every 1.5 s,
+  re-synced whenever the HUD reads).
+- **Smooth movement:** the `scrcpy` control backend (docs/ANDROID_CONTROL.md,
+  section 0) holds the joystick instead of re-swiping every tick.
+- **Options** in the web UI are open by default (they were a collapsed, faint
+  section above Start).
+- **Record raw frames for debugging** (web UI, Options) writes a JPEG every 2 s
+  plus `decisions.jsonl` (mode, reason, goal, move, planner state per frame)
+  to `media/recordings/<time>/`. That folder is not git-ignored: commit and
+  push a recording of the bot getting stuck so perception can be fixed on
+  the real screen.
+
 ## What still needs building
 
 The whole reward list now runs on real perception — including **super charge**

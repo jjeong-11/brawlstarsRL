@@ -26,6 +26,27 @@ Pixel — no emulator required.
 
 ---
 
+## 0. Smooth movement: the scrcpy backend (recommended)
+
+`adb input swipe` lifts the finger at the end of every swipe, so on the adb
+backend the brawler walks, stops, and walks again every tick. The **scrcpy**
+backend (`rl/scrcpy_control.py`) instead talks to the official scrcpy server
+over adb: the joystick finger goes down once and stays down, only moving to
+change direction, and attack/super are separate fingers, so firing never
+interrupts movement.
+
+```bash
+brew install scrcpy                     # macOS (Linux: apt install scrcpy, 2.1+)
+python3 -m rl.scrcpy_control --serial <SERIAL> --selftest          # taps attack, super, holds the stick right 1 s
+python3 -m rl.scrcpy_control --serial <SERIAL> --walk 1            # walks a square with the stick held
+python3 scripts/watch_live.py --serial <SERIAL> --calibrate --backend scrcpy --controls controls.json
+```
+
+Then pick **scrcpy** under Options -> Control backend in the web UI. Nothing
+is mirrored or recorded: only scrcpy's control channel is opened
+(`video=false audio=false`). If the server jar or version cannot be found, set
+`SCRCPY_SERVER_PATH` and `SCRCPY_VERSION`.
+
 ## 1. Two ways to run on a physical phone
 
 | Path | Input | Capture | Latency | Setup |

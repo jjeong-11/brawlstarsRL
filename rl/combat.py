@@ -106,7 +106,7 @@ box, so kill attribution (`rl/kills.py`) only hears about the first.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import hypot
+from math import ceil, hypot
 from typing import List, Optional, Tuple
 
 
@@ -263,6 +263,15 @@ class CombatConfig:
     # one round, do not spend it on a target further than this fraction of
     # the gate unless it is nearly dead. 0 disables (fire whenever possible).
     reserve_last_ammo_frac: float = 0.0
+    # SELF-COUNTED CLIP. On a real phone the ammo bar is located on a
+    # minority of frames, so `ammo_known` is usually False and nothing
+    # stopped the trigger: the clip was emptied in under a second and the
+    # brawler had nothing left when the fight actually arrived. The policy
+    # now keeps its own count -- `assumed_ammo` rounds, one back every
+    # `assumed_reload_s` -- spends one per attack it sends, and re-syncs to
+    # the HUD whenever a trusted reading exists. 0 disables.
+    assumed_ammo: int = 3
+    assumed_reload_s: float = 1.5
 
 
 @dataclass(frozen=True)
@@ -335,7 +344,22 @@ class CombatPolicy:
     def reset(self) -> None:
         self._super_cooldown = 0
         self._attack_cooldown = 0
+        self._clip = float(self.config.assumed_ammo)
         self.last_reason = "idle"
+
+    def _update_clip(self, state) -> None:
+        """Reload the self-counted clip by one tick, or sync it to the HUD."""
+        cfg = self.config
+        if cfg.assumed_ammo <= 0:
+            return
+        if not hasattr(self, "_clip"):
+            self._clip = float(cfg.assumed_ammo)
+        if getattr(state, "ammo_known", False):
+            self._clip = float(min(cfg.assumed_ammo, getattr(state, "ammo_count", 0)))
+            return
+        if cfg.assumed_reload_s > 0 and cfg.tick_seconds > 0:
+            self._clip = min(float(cfg.assumed_ammo),
+                             self._clip + cfg.tick_seconds / cfg.assumed_reload_s)
 
     # ------------------------------------------------------------------ #
     def range_px(self, frame_size=None, span_px: Optional[float] = None) -> float:
@@ -440,6 +464,7 @@ class CombatPolicy:
 
         if state is None:
             return _no("no state")
+        self._update_clip(state)
         player = getattr(state, "player_pos", None)
         fs = frame_size or getattr(state, "frame_size", None)
         if player is None and fs and (getattr(state, "enemy_positions", None)
@@ -514,6 +539,9 @@ class CombatPolicy:
         if getattr(state, "ammo_known", False) and getattr(state, "ammo_count", 0) < 1:
             attack = False
             self.last_reason = "empty clip"
+        elif cfg.assumed_ammo > 0 and self._clip < 1.0:
+            attack = False
+            self.last_reason = f"reloading ({self._clip:.1f})"
         elif (attack and cfg.reserve_last_ammo_frac > 0
               and getattr(state, "ammo_known", False)
               and getattr(state, "ammo_count", 0) == 1
@@ -527,11 +555,16 @@ class CombatPolicy:
         else:
             kind = "box" if chosen.kind == "box" else "target"
             self.last_reason = f"{kind} at {dist:.2f}"
+        if attack and cfg.assumed_ammo > 0:
+            self._clip -= 1.0
         if attack and cfg.attack_interval_s > 0 and cfg.tick_seconds > 0:
-            # Decremented at the top of every decide(), so N here means the
-            # next shot is allowed N ticks from now.
-            self._attack_cooldown = max(0, int(round(cfg.attack_interval_s
-                                                     / cfg.tick_seconds)))
+            # Decremented at the top of every decide() before the check, so a
+            # cooldown of N means the next shot goes N ticks from now. ceil()
+            # keeps that gap >= attack_interval_s at any tick rate; round()
+            # turned 0.3 s at the web UI's 4 ticks/s into 1 tick, so the bot
+            # fired on every tick.
+            self._attack_cooldown = max(1, int(ceil(cfg.attack_interval_s
+                                                    / cfg.tick_seconds - 1e-9)))
 
         charge = getattr(state, "super_charge", None) or 0.0
         fire_super = (chosen.kind == "enemy"

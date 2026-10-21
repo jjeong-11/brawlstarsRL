@@ -69,7 +69,7 @@ const el = {
   mode: $('mode'), segThumb: $('segThumb'), modeHint: $('modeHint'),
   serial: $('serial'), fps: $('fps'), fpsVal: $('fpsVal'),
   backend: $('backend'), deterministic: $('deterministic'), brain: $('brain'),
-  saveTraces: $('saveTraces'), videoPath: $('videoPath'),
+  saveTraces: $('saveTraces'), recordFrames: $('recordFrames'), videoPath: $('videoPath'),
   start: $('startBtn'), stop: $('stopBtn'),
   pill: $('statusPill'), stream: $('stream'), placeholder: $('placeholder'),
   frameInfo: $('frameInfo'), stats: $('stats'), breakdown: $('breakdown'),
@@ -273,6 +273,7 @@ async function start() {
         brain: el.brain.value,
         deterministic: el.deterministic.checked,
         save_traces: el.saveTraces.checked,
+        record_frames: el.recordFrames.checked,
       }),
     });
     const data = await r.json();

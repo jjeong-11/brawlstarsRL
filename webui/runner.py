@@ -93,9 +93,14 @@ class SessionConfig:
     source: str = "phone"                 # "phone" | "video" (offline testing)
     video_path: Optional[str] = None
     controls_path: Optional[str] = None   # controls.json for control mode
-    backend: str = "adb"                  # "adb" | "sendevent"  (control only)
+    backend: str = "adb"                  # "adb" | "scrcpy" | "sendevent" (control only)
     sendevent_orientation: str = "A"
     save_traces: bool = False             # also write debugOutput/trace/
+    # Raw frames + what the bot decided on each, every `record_every_s`, to
+    # media/recordings/<time>/ (NOT git-ignored: commit and push it so the
+    # perception can be debugged on your phone's real screen).
+    record_frames: bool = False
+    record_every_s: float = 2.0
     deterministic: bool = False           # policy.predict(deterministic=...)
     # Who decides where to move:
     #   "tactical" rl/tactics.py, the scripted Showdown strategy
@@ -376,6 +381,7 @@ class SessionRunner:
             was_in_match = False
             frame_times: Deque[float] = collections.deque(maxlen=20)
             period = 1.0 / cfg.fps
+            recorder = _Recorder(cfg, self._say) if cfg.record_frames else None
 
             while not self._stop.is_set():
                 t0 = time.time()
@@ -522,6 +528,9 @@ class SessionRunner:
                 else:
                     intent = executor.apply(action, **kwargs)
                 m.prev_raw = tuple(intent.raw)
+                if recorder is not None:
+                    recorder.maybe_record(frame, t0, tick, episode, state, goal,
+                                          intent, combat, m.planner, terrain, screen)
 
                 # --- the picture ------------------------------------------ #
                 try:
@@ -610,6 +619,10 @@ class SessionRunner:
                       "or the taps will miss.")
         controls = Controls.from_json(controls_path) if controls_path else None
 
+        if cfg.backend == "scrcpy":
+            from rl.scrcpy_control import ScrcpyExecutor
+            self._say("CONTROL MODE: scrcpy executor (held movement) — the bot is playing")
+            return ScrcpyExecutor(serial=cfg.serial, controls=controls, log=self._say)
         if cfg.backend == "sendevent":
             from rl.sendevent_backend import SendeventExecutor
             flip_short, flip_long = ((False, True)
@@ -624,6 +637,49 @@ class SessionRunner:
 
 
 # --------------------------------------------------------------------------- #
+class _Recorder:
+    """Raw frames plus the decision taken on each, for offline debugging."""
+
+    def __init__(self, cfg: SessionConfig, say) -> None:
+        self.every = max(0.2, float(cfg.record_every_s))
+        self.dir = _ROOT / "media" / "recordings" / time.strftime("%Y%m%d-%H%M%S")
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.log = open(self.dir / "decisions.jsonl", "a")
+        self.last = -1e9
+        self.n = 0
+        self.backend = cfg.backend if cfg.mode == "control" else "observe"
+        say(f"recording raw frames every {self.every:.1f}s to {self.dir}")
+
+    def maybe_record(self, frame, t, tick, episode, state, goal, intent, combat,
+                     planner, terrain, screen) -> None:
+        if t - self.last < self.every:
+            return
+        self.last = t
+        import json
+        import cv2
+        name = f"{self.n:05d}.jpg"
+        self.n += 1
+        cv2.imwrite(str(self.dir / name), frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        st = planner.status() if planner is not None else None
+        rec = {
+            "frame": name, "t": round(t, 2), "tick": tick, "episode": episode,
+            "screen": screen, "backend": self.backend,
+            "player": list(state.player_pos) if state.player_pos is not None else None,
+            "hp": state.health, "players_left": state.players_left,
+            "mode": getattr(goal, "mode", None), "reason": getattr(goal, "reason", None),
+            "goal": list(goal.point) if goal is not None and goal.point is not None else None,
+            "move": [round(float(v), 3) for v in intent.move],
+            "attack": bool(intent.fire_attack), "super": bool(intent.fire_super),
+            "combat": getattr(combat, "reason", None),
+            "planner": None if st is None else {"mode": st.mode, "blocked": bool(st.blocked)},
+            "terrain": bool(terrain),
+            "localized": bool(getattr(planner.world, "have_reference", False))
+            if planner is not None else False,
+        }
+        self.log.write(json.dumps(rec) + "\n")
+        self.log.flush()
+
+
 def _config_dict(cfg: SessionConfig) -> dict:
     from dataclasses import asdict
     return asdict(cfg)

@@ -64,7 +64,7 @@
       <option value="policy">Learned policy — the trained (heading, distance) net</option>
     </select>
 
-    <details class="more">
+    <details class="more" open>
       <summary>Options</summary>
       <div class="more-body">
         <label for="serial">Device</label>
@@ -76,11 +76,13 @@
         <label for="backend">Control backend</label>
         <select id="backend">
           <option value="adb">adb — works everywhere, bursty movement</option>
-          <option value="sendevent">sendevent — smooth held movement</option>
+          <option value="scrcpy">scrcpy — smooth held movement (needs scrcpy installed)</option>
+          <option value="sendevent">sendevent — blocked on recent Android</option>
         </select>
 
         <label class="check"><input type="checkbox" id="deterministic"><span>Deterministic policy</span></label>
         <label class="check"><input type="checkbox" id="saveTraces"><span>Also write frames to debugOutput/trace/</span></label>
+        <label class="check"><input type="checkbox" id="recordFrames"><span>Record raw frames for debugging (media/recordings/)</span></label>
 
         <label for="videoPath">Play a recording instead of the phone</label>
         <input type="text" id="videoPath" placeholder="media/testvideos/….mp4">

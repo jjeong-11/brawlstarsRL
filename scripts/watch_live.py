@@ -114,6 +114,8 @@ def main() -> None:
     ap.add_argument("--calibrate", action="store_true",
                     help="first tap each control once (verify AdbExecutor placement)")
     ap.add_argument("--controls", default=None, help="controls.json for --calibrate")
+    ap.add_argument("--backend", choices=("adb", "scrcpy"), default="adb",
+                    help="touch backend --calibrate uses (scrcpy needs scrcpy installed)")
     ap.add_argument("--trace", type=float, default=0.0, metavar="SECONDS",
                     help="run the planner alongside you and write an annotated "
                          "decision frame every SECONDS to debugOutput/trace/. "
@@ -141,8 +143,12 @@ def main() -> None:
     controls = Controls.from_json(args.controls) if args.controls else None
 
     if args.calibrate:
-        from rl.actions import AdbExecutor
-        ex = AdbExecutor(serial=args.serial, controls=controls)
+        if args.backend == "scrcpy":
+            from rl.scrcpy_control import ScrcpyExecutor
+            ex = ScrcpyExecutor(serial=args.serial, controls=controls)
+        else:
+            from rl.actions import AdbExecutor
+            ex = AdbExecutor(serial=args.serial, controls=controls)
         print("Calibrating: tapping attack, then super, then a right move-swipe. Watch the phone.")
         ex.calibrate()
         ex.close()

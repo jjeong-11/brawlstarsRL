@@ -178,6 +178,7 @@ def create_app() -> Flask:
                 backend=str(body.get("backend") or "adb"),
                 sendevent_orientation=str(body.get("sendevent_orientation") or "A"),
                 save_traces=bool(body.get("save_traces", False)),
+                record_frames=bool(body.get("record_frames", False)),
                 deterministic=bool(body.get("deterministic", False)),
                 brain=str(body.get("brain") or "auto"),
             )
