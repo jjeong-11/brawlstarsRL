@@ -272,6 +272,11 @@ class CombatConfig:
     # the HUD whenever a trusted reading exists. 0 disables.
     assumed_ammo: int = 3
     assumed_reload_s: float = 1.5
+    # The count only GATES the trigger once the HUD has been unreadable for
+    # this long. It cannot see taps that did not fire, so it drifts low; in the
+    # simulator, where the bar reads half the time, gating on it always cost
+    # ~0.1 mean place. A trusted reading is better whenever there is one.
+    clip_gate_after_s: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -345,6 +350,7 @@ class CombatPolicy:
         self._super_cooldown = 0
         self._attack_cooldown = 0
         self._clip = float(self.config.assumed_ammo)
+        self._since_read = 1e9
         self.last_reason = "idle"
 
     def _update_clip(self, state) -> None:
@@ -354,8 +360,10 @@ class CombatPolicy:
             return
         if not hasattr(self, "_clip"):
             self._clip = float(cfg.assumed_ammo)
+        self._since_read = getattr(self, "_since_read", 1e9) + cfg.tick_seconds
         if getattr(state, "ammo_known", False):
             self._clip = float(min(cfg.assumed_ammo, getattr(state, "ammo_count", 0)))
+            self._since_read = 0.0
             return
         if cfg.assumed_reload_s > 0 and cfg.tick_seconds > 0:
             self._clip = min(float(cfg.assumed_ammo),
@@ -539,7 +547,8 @@ class CombatPolicy:
         if getattr(state, "ammo_known", False) and getattr(state, "ammo_count", 0) < 1:
             attack = False
             self.last_reason = "empty clip"
-        elif cfg.assumed_ammo > 0 and self._clip < 1.0:
+        elif (cfg.assumed_ammo > 0 and self._clip < 1.0
+              and getattr(self, "_since_read", 1e9) >= cfg.clip_gate_after_s):
             attack = False
             self.last_reason = f"reloading ({self._clip:.1f})"
         elif (attack and cfg.reserve_last_ammo_frac > 0

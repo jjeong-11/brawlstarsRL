@@ -92,9 +92,9 @@ pro footage --(camera-motion IDM, HUD reads, "show taps")--> (state features, ac
 ### Phase 1: data and speed (started)
 | Step | Output | Status |
 |---|---|---|
-| 1a | `tools/label_footage.py`: per-frame movement from camera motion, attack/super from HUD changes, and touch positions when "Show taps" is on | started |
-| 1b | scrcpy H.264 capture (PyAV), latest-frame only; target < 80 ms frame age | started |
-| 1c | Validate decision-layer imitation in the sim: demos from a known config, fit, check recovery | started |
+| 1a | `tools/label_footage.py`: per-frame movement from camera motion, attack/super from HUD changes; "Show taps" reading still to do | **done (synthetic)** |
+| 1b | `rl/scrcpy_video.py`: scrcpy H.264 capture (PyAV), latest-frame only; target < 80 ms frame age | **done; untested on a phone** |
+| 1c | `sim/imitate.py`: decision-layer imitation from movement alone, validated in the sim | **partial** (see below) |
 | 1d | Learned detector (YOLO to ONNX) trained on frames auto-labelled by the current perception, then corrected by hand; replaces the HSV profiles | next |
 
 **Exit criteria:**
@@ -103,6 +103,35 @@ pro footage --(camera-motion IDM, HUD reads, "show taps")--> (state features, ac
 - Capture: frame age ≤ 80 ms at ≥ 15 fps.
 - Imitation fit: recovers held-out behaviour, with fitted-policy placement
   within 0.2 of the demonstrator's in the sim.
+
+#### Phase 1 results so far
+
+- **1a, labeller:** on synthetic footage with a known path (16 headings,
+  stops, a clamped camera), the median heading error is 1.5°, 100% of moving
+  frames are within 30°, no still frame reads as moving, and speed is
+  recovered (~2.4 tiles/s). It still needs checking on real footage, which has
+  animations, other brawlers and projectiles.
+- **1b, capture:** decodes a real H.264 stream from a fake scrcpy server.
+  Frame age on a phone is still unmeasured
+  (`python -m rl.scrcpy_video --seconds 10`).
+- **1c, imitation:** on 24 demonstration matches (22k ticks), the hidden
+  demonstrator settings score highest of 32 candidates (agreement 0.629 vs
+  0.618 for the best other, 0.537 for the defaults). Agreement falls with
+  parameter distance from the truth (Spearman -0.71). So movement alone does
+  carry the signal.
+- **1c, blind fit:** a random-then-local search that never sees the truth
+  recovered `camp_utility` (1% of range off), `engage_ratio` (14%) and
+  `box_utility` (21%), but not the avoid/retreat settings (45-75% off). The
+  fitted policy places 3.59 against the demonstrator's 3.92, the same as the
+  defaults (3.60). **This misses the 0.2 exit criterion.**
+- **Next for 1c:**
+  - Weight ticks by how much the candidates disagree. Avoid and retreat only
+    matter when an enemy is visible but not worth fighting, and those ticks
+    are drowned out by easy agreement while exploring.
+  - Add shorter-horizon labels.
+  - Replace the random search with CMA-ES.
+  - Score play-level statistics (fight rate, time near enemies, cubes) in
+    addition to per-tick agreement.
 
 ### Phase 2: learn from the pros
 - Run the labeller and perception over the footage to get (features, action)

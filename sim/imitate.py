@@ -117,26 +117,50 @@ def _play(job):
         n = math.hypot(dx, dy)
         labels.append(None if n < STILL_TILES else (dx / n, dy / n))
 
-    sums = [0.0] * len(cands)
+    K = len(cands)
+    sums = [0.0] * K
+    wsums = [0.0] * K
     n = 0
+    wtot = 0.0
     for i, lab in enumerate(labels):
         if lab == "end":
             continue
         n += 1
-        for k in range(len(cands)):
+        # How much do the candidates disagree here? Mean pairwise agreement
+        # A from the resultant of the movers (sum of cosines over pairs is
+        # (|S|^2 - m) / 2) plus stay-stay pairs; weight = 1 - A. Ticks where
+        # every setting would do the same thing carry no information about
+        # the settings, and they are most ticks.
+        mv = [preds[k][i] for k in range(K) if preds[k][i] is not None]
+        stays = K - len(mv)
+        sx = sum(v[0] for v in mv)
+        sy = sum(v[1] for v in mv)
+        pair = stays * (stays - 1) + max(0.0, sx * sx + sy * sy - len(mv))
+        w = 1.0 - pair / max(1, K * (K - 1))
+        wtot += w
+        for k in range(K):
             p = preds[k][i]
+            a = 0.0
             if lab is None and p is None:
-                sums[k] += 1.0
+                a = 1.0
             elif lab is not None and p is not None:
-                sums[k] += max(0.0, lab[0] * p[0] + lab[1] * p[1])
-    return sums, n, r.rank
+                a = max(0.0, lab[0] * p[0] + lab[1] * p[1])
+            sums[k] += a
+            wsums[k] += w * a
+    return sums, n, r.rank, wsums, wtot
 
 
-def score(cands, seeds, workers, demo=SECRET):
-    """Agreement of every candidate with the demonstrator over `seeds`."""
+def score(cands, seeds, workers, demo=SECRET, weighted=False):
+    """Agreement of every candidate with the demonstrator over `seeds`.
+
+    weighted=True scores only where the candidates disagree (see _play); the
+    numbers are then relative to this candidate set."""
     jobs = [(s, demo, cands) for s in seeds]
     with mp.get_context("spawn").Pool(workers) as pool:
         res = pool.map(_play, jobs, chunksize=1)
+    if weighted:
+        wt = sum(r[4] for r in res)
+        return [sum(r[3][k] for r in res) / max(1e-9, wt) for k in range(len(cands))]
     n = sum(r[1] for r in res)
     return [sum(r[0][k] for r in res) / max(1, n) for k in range(len(cands))]
 
@@ -149,22 +173,23 @@ def perturb(base: dict, rng: random.Random, frac: float) -> dict:
     return out
 
 
-def fit(seeds, workers, rounds=3, per_round=24, keep=3, rng_seed=11):
+def fit(seeds, workers, rounds=5, per_round=24, keep=4, rng_seed=11, weighted=True):
     """Random search, then shrinking local search around the leaders. The
-    demonstrator's settings are never among the candidates."""
+    demonstrator's settings are never among the candidates. Leaders are
+    re-scored with each new round, so weighted scores stay comparable."""
     rng = random.Random(rng_seed)
     pool_ = [sample(rng) for _ in range(per_round)]
     scored = []
     for r in range(rounds):
-        sc = score(pool_, seeds, workers)
-        scored += list(zip(sc, pool_))
-        scored.sort(key=lambda t: -t[0])
+        sc = score(pool_, seeds, workers, weighted=weighted)
+        scored = sorted(zip(sc, pool_), key=lambda t: -t[0])
         best = scored[0]
         print(f"  round {r}: best agreement {best[0]:.3f}  dist {distance(best[1], SECRET):.2f}  {best[1]}",
               flush=True)
         leaders = [c for _, c in scored[:keep]]
-        frac = 0.15 / (r + 1)
-        pool_ = [perturb(leaders[i % keep], rng, frac) for i in range(per_round)]
+        frac = 0.2 / (r + 1)
+        pool_ = leaders + [perturb(leaders[i % keep], rng, frac)
+                           for i in range(per_round - keep)]
     return scored[0]
 
 
@@ -174,13 +199,15 @@ def main(argv=None) -> int:
     ap.add_argument("--candidates", type=int, default=24)
     ap.add_argument("--seed", type=int, default=9000)
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--unweighted", action="store_true",
+                    help="score every tick equally (the first version)")
     ap.add_argument("--fit", action="store_true",
                     help="search for the settings (without the true ones) and report recovery")
     a = ap.parse_args(argv)
 
     if a.fit:
         seeds = list(range(a.seed, a.seed + a.matches))
-        sc, best = fit(seeds, a.workers)
+        sc, best = fit(seeds, a.workers, weighted=not a.unweighted)
         print(f"fitted: agreement {sc:.3f}, distance to the demonstrator {distance(best, SECRET):.2f}")
         for k, (lo, hi) in SPACE.items():
             print(f"  {k:20s} fitted {best[k]:6.2f}   true {SECRET[k]:6.2f}   "
