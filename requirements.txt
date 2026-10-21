@@ -7,6 +7,8 @@ pytesseract>=0.3.10        # also requires the system `tesseract` binary:
 mss>=6.0                  # only needed for live screen capture (--screen)
 # scrcpy-client is intentionally optional: its bundled 2022 server is not
 # compatible with the phone used for live training.
+av>=12                    # PyAV: decodes the scrcpy H.264 stream (rl/scrcpy_video.py).
+                          # The scrcpy server itself comes from `brew install scrcpy`.
 
 # --- Reinforcement learning ---
 gymnasium>=0.29           # env API

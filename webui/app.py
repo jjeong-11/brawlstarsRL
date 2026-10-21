@@ -179,6 +179,7 @@ def create_app() -> Flask:
                 sendevent_orientation=str(body.get("sendevent_orientation") or "A"),
                 save_traces=bool(body.get("save_traces", False)),
                 record_frames=bool(body.get("record_frames", False)),
+                capture=str(body.get("capture") or "screencap"),
                 deterministic=bool(body.get("deterministic", False)),
                 brain=str(body.get("brain") or "auto"),
             )

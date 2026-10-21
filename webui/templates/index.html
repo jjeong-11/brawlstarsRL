@@ -73,6 +73,12 @@
         <label for="fps">Ticks per second <b class="num" id="fpsVal">4</b></label>
         <input type="range" id="fps" min="1" max="10" step="1" value="4">
 
+        <label for="capture">Frame capture</label>
+        <select id="capture">
+          <option value="screencap">adb screencap — 150-400 ms per frame</option>
+          <option value="scrcpy">scrcpy video — tens of ms (needs scrcpy + PyAV)</option>
+        </select>
+
         <label for="backend">Control backend</label>
         <select id="backend">
           <option value="adb">adb — works everywhere, bursty movement</option>

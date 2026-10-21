@@ -47,6 +47,17 @@ is mirrored or recorded: only scrcpy's control channel is opened
 (`video=false audio=false`). If the server jar or version cannot be found, set
 `SCRCPY_SERVER_PATH` and `SCRCPY_VERSION`.
 
+### Fast capture over scrcpy
+
+`adb screencap` costs 150-400 ms a frame, the largest delay in the loop.
+`rl/scrcpy_video.py` takes frames from scrcpy's hardware H.264 stream instead
+(`pip install av`). Measure it on your phone, then pick **scrcpy video** under
+Options -> Frame capture in the web UI:
+
+```bash
+python3 -m rl.scrcpy_video --serial <SERIAL> --seconds 10 --save /tmp/frame.png
+```
+
 ## 1. Two ways to run on a physical phone
 
 | Path | Input | Capture | Latency | Setup |

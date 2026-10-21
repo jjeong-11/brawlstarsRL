@@ -91,6 +91,9 @@ class SessionConfig:
     serial: Optional[str] = None          # adb device; None = the only one
     fps: float = 4.0                      # target ticks/second
     source: str = "phone"                 # "phone" | "video" (offline testing)
+    # How phone frames are captured: "screencap" (adb, 150-400 ms a frame) or
+    # "scrcpy" (H.264 stream, tens of ms; needs scrcpy + PyAV).
+    capture: str = "screencap"
     video_path: Optional[str] = None
     controls_path: Optional[str] = None   # controls.json for control mode
     backend: str = "adb"                  # "adb" | "scrcpy" | "sendevent" (control only)
@@ -593,6 +596,12 @@ class SessionRunner:
             from perception.liveLoop import VideoSource
             self._say(f"frame source: video {cfg.video_path}")
             return VideoSource(cfg.video_path)
+        if cfg.capture == "scrcpy":
+            from rl.scrcpy_video import ScrcpyVideoSource
+            src = ScrcpyVideoSource(cfg.serial, log=self._say)
+            self._say("frame source: scrcpy video stream"
+                      f"{f' ({cfg.serial})' if cfg.serial else ''}")
+            return src
         from perception.liveLoop import AdbScreencapSource
         src = AdbScreencapSource(cfg.serial)
         self._say(f"frame source: adb screencap"
