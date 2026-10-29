@@ -52,7 +52,7 @@ from perception.liveLoop import (  # noqa: E402
     LivePerception, VideoSource, ScreenSource, AdbScreencapSource)
 from perception.getTerrain import (  # noqa: E402
     find_terrain, play_rect, ProfileSelector, GRID_W, GRID_H)
-from perception.getGas import gas_info  # noqa: E402
+from perception.getGas import gas_info, player_anchor  # noqa: E402
 
 from .actions import make_action_space, LoggingExecutor, ActionExecutor
 from .camera_tracker import CameraTracker
@@ -846,7 +846,8 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
             # not, and the planner is told so separately.
             rect_now = (self._terrain["rect"] if self._terrain
                         else self._safe_play_rect(frame))
-            self._gas_grid_now = self._gas_for(frame, rect_now, (GRID_W, GRID_H))
+            self._gas_grid_now = self._gas_for(frame, rect_now, (GRID_W, GRID_H),
+                                               player=player_anchor(state))
             if self._terrain is not None:
                 self._terrain["gas"] = self._gas_grid_now
             elif rect_now is not None:
@@ -881,7 +882,7 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
         except Exception:
             return self._last_rect
 
-    def _gas_for(self, frame, rect, grid_size):
+    def _gas_for(self, frame, rect, grid_size, player=None):
         """Gas grid over `rect`, recomputed at most every N steps.
 
         `gas_info`'s mask is the single most expensive thing this env does
@@ -905,7 +906,8 @@ class BrawlStarsEnv(gym.Env if _GYM else object):
             self._gas_age += 1
             return None
         try:
-            grid = gas_info(frame, grid_rect=rect, grid_size=(gw, gh))["grid"]
+            grid = gas_info(frame, player_pos=player, grid_rect=rect,
+                            grid_size=(gw, gh))["grid"]
         except Exception:
             grid = None
         self._gas_age = 1

@@ -70,6 +70,48 @@ def distance(a: dict, b: dict) -> float:
                          for k, (lo, hi) in SPACE.items()) / len(SPACE))
 
 
+def agreement(preds, labels):
+    """Per-candidate agreement with labelled movement.
+
+    preds[k][i]: candidate k's direction at tick i (unit vector) or None (hold).
+    labels[i]: observed direction (unit vector), None (stayed), or "end"
+    (no future to label). Returns (sums, n, weighted_sums, weight_total):
+    plain agreement is sums[k] / n, disagreement-weighted is
+    weighted_sums[k] / weight_total.
+    """
+    K = len(preds)
+    sums = [0.0] * K
+    wsums = [0.0] * K
+    n = 0
+    wtot = 0.0
+    for i, lab in enumerate(labels):
+        if lab == "end":
+            continue
+        n += 1
+        # How much do the candidates disagree here? Mean pairwise agreement
+        # A from the resultant of the movers (sum of cosines over pairs is
+        # (|S|^2 - m) / 2) plus stay-stay pairs; weight = 1 - A. Ticks where
+        # every setting would do the same thing carry no information about
+        # the settings, and they are most ticks.
+        mv = [preds[k][i] for k in range(K) if preds[k][i] is not None]
+        stays = K - len(mv)
+        sx = sum(v[0] for v in mv)
+        sy = sum(v[1] for v in mv)
+        pair = stays * (stays - 1) + max(0.0, sx * sx + sy * sy - len(mv))
+        w = 1.0 - pair / max(1, K * (K - 1))
+        wtot += w
+        for k in range(K):
+            p = preds[k][i]
+            a = 0.0
+            if lab is None and p is None:
+                a = 1.0
+            elif lab is not None and p is not None:
+                a = max(0.0, lab[0] * p[0] + lab[1] * p[1])
+            sums[k] += a
+            wsums[k] += w * a
+    return sums, n, wsums, wtot
+
+
 def _play(job):
     """One demonstration match; returns per-candidate agreement sums."""
     seed, demo, cands = job
@@ -117,36 +159,7 @@ def _play(job):
         n = math.hypot(dx, dy)
         labels.append(None if n < STILL_TILES else (dx / n, dy / n))
 
-    K = len(cands)
-    sums = [0.0] * K
-    wsums = [0.0] * K
-    n = 0
-    wtot = 0.0
-    for i, lab in enumerate(labels):
-        if lab == "end":
-            continue
-        n += 1
-        # How much do the candidates disagree here? Mean pairwise agreement
-        # A from the resultant of the movers (sum of cosines over pairs is
-        # (|S|^2 - m) / 2) plus stay-stay pairs; weight = 1 - A. Ticks where
-        # every setting would do the same thing carry no information about
-        # the settings, and they are most ticks.
-        mv = [preds[k][i] for k in range(K) if preds[k][i] is not None]
-        stays = K - len(mv)
-        sx = sum(v[0] for v in mv)
-        sy = sum(v[1] for v in mv)
-        pair = stays * (stays - 1) + max(0.0, sx * sx + sy * sy - len(mv))
-        w = 1.0 - pair / max(1, K * (K - 1))
-        wtot += w
-        for k in range(K):
-            p = preds[k][i]
-            a = 0.0
-            if lab is None and p is None:
-                a = 1.0
-            elif lab is not None and p is not None:
-                a = max(0.0, lab[0] * p[0] + lab[1] * p[1])
-            sums[k] += a
-            wsums[k] += w * a
+    sums, n, wsums, wtot = agreement(preds, labels)
     return sums, n, r.rank, wsums, wtot
 
 

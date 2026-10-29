@@ -254,7 +254,7 @@ class SessionRunner:
         source = executor = tracer = None
         try:
             import cv2
-            from perception.getGas import gas_info
+            from perception.getGas import gas_info, player_anchor
             from perception.getTerrain import (GRID_H, GRID_W, ProfileSelector,
                                                find_terrain, play_rect)
             from perception.liveLoop import LivePerception
@@ -476,7 +476,7 @@ class SessionRunner:
                         terrain = None
                 rect = terrain["rect"] if terrain else play_rect(frame)
                 try:
-                    gas = gas_info(frame, grid_rect=rect,
+                    gas = gas_info(frame, player_pos=player_anchor(state), grid_rect=rect,
                                    grid_size=(GRID_W, GRID_H))["grid"]
                 except Exception:
                     gas = None

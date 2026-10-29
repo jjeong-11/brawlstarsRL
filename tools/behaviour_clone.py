@@ -107,7 +107,7 @@ def extract(video: str, out: str, max_frames: int = 0, min_speed: float = 1.5,
     """Run perception over a recording and write (observation, action) pairs."""
     from perception.liveLoop import LivePerception
     from perception.getTerrain import find_terrain, play_rect, ProfileSelector, GRID_W, GRID_H
-    from perception.getGas import gas_info
+    from perception.getGas import gas_info, player_anchor
     from rl.camera_tracker import CameraTracker
     from rl.path_planner import WaypointPlanner
     from rl.state import adapt_live_state
@@ -159,7 +159,8 @@ def extract(video: str, out: str, max_frames: int = 0, min_speed: float = 1.5,
             pass
         rect = terrain["rect"] if terrain else (rect or play_rect(frame))
         try:
-            gas = gas_info(frame, grid_rect=rect, grid_size=(GRID_W, GRID_H))["grid"]
+            gas = gas_info(frame, player_pos=player_anchor(state), grid_rect=rect,
+                           grid_size=(GRID_W, GRID_H))["grid"]
         except Exception:
             gas = None
 

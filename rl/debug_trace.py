@@ -590,7 +590,7 @@ if __name__ == "__main__":
                                                               img.shape[0] // 2)
     terrain = find_terrain(img, player_pos=player)
     rect = terrain["rect"] if terrain else play_rect(img)
-    gas = gas_info(img, grid_rect=rect, grid_size=(48, 27))
+    gas = gas_info(img, player_pos=anchor if anchor else None, grid_rect=rect, grid_size=(48, 27))
     state = GameState(player_pos=player, in_gas=gas["in_gas"],
                       gas_safe=gas["safe_vector"], gas_sides=gas["sides"],
                       frame_size=(img.shape[1], img.shape[0]))

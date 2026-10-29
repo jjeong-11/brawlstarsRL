@@ -71,6 +71,8 @@ class GameState:
     # clip is empty. Anything gating on empty must check this first.
     ammo_known: bool = False
     player_pos: Optional[Point] = None
+    # Radius of the player's ring in frame px (from the anchor), or None.
+    player_radius: Optional[float] = None
     # How player_pos was obtained this tick: "digits" (the reliable digit-first
     # path), "ring" / "ring_unverified" (the weak fallback), "none". Diagnostic
     # only -- nothing learns from it -- but without it a WRONG anchor and a
@@ -180,6 +182,7 @@ def adapt_live_state(live: dict, tick: int = 0,
         ammo_count=int(live.get("ammo") or 0),
         ammo_known=bool(live.get("ammo_known")),
         player_pos=player_pos,
+        player_radius=(float(anchor[2]) if anchor and len(anchor) > 2 and anchor[2] else None),
         anchor_source=str(live.get("anchor_source") or "none"),
         anchor_fresh=bool(live.get("anchor_fresh")),
         enemy_positions=enemy_positions,

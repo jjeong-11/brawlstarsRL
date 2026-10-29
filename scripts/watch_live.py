@@ -41,7 +41,7 @@ import cv2  # noqa: E402
 from perception.liveLoop import AdbScreencapSource, LivePerception  # noqa: E402
 from perception.getSuper import SUPER_ROI  # noqa: E402
 from perception.getTerrain import find_terrain, play_rect, ProfileSelector, GRID_W, GRID_H  # noqa: E402
-from perception.getGas import gas_info  # noqa: E402
+from perception.getGas import gas_info, player_anchor  # noqa: E402
 from rl.state import adapt_live_state  # noqa: E402
 from rl.rewards import RewardCalculator, RewardConfig  # noqa: E402
 from rl.kills import KillAttributor  # noqa: E402
@@ -303,7 +303,8 @@ def _trace_decision(tracer, frame, live, state, result, tick,
             terrain = None
     rect = terrain["rect"] if terrain else play_rect(frame)
     try:
-        gas = gas_info(frame, grid_rect=rect, grid_size=(GRID_W, GRID_H))["grid"]
+        gas = gas_info(frame, player_pos=player_anchor(state), grid_rect=rect,
+                       grid_size=(GRID_W, GRID_H))["grid"]
     except Exception:
         gas = None
     if terrain is None and rect is not None:

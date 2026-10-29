@@ -123,6 +123,18 @@ def _pool_gas_grid(mask: np.ndarray, rect, grid_size, downscale: float) -> np.nd
     return small.astype(np.float32) / 255.0
 
 
+def player_anchor(state):
+    """(x, y, r) for gas_info from a GameState, or None."""
+    pos = getattr(state, "player_pos", None)
+    r = getattr(state, "player_radius", None)
+    return (pos[0], pos[1], r) if pos is not None and r else None
+
+
+# Player sprite box blanked out of the gas grid, in ring radii from the anchor:
+# (half width, above, below). See gas_info.
+SPRITE_BOX = (1.7, 1.9, 3.1)
+
+
 def gas_info(image: np.ndarray, player_pos=None, downscale: float = 0.5,
              hsv: np.ndarray = None, grid_rect=None, grid_size=(48, 27)):
     """Full gas picture for the RL state: where the gas is, which way is safe.
@@ -182,6 +194,21 @@ def gas_info(image: np.ndarray, player_pos=None, downscale: float = 0.5,
         in_gas = False
     px = min(max(px, 1), sw - 1)
     py = min(max(py, 1), sh - 1)
+
+    if player_pos is not None and player_pos[2] > 0:
+        # THE PLAYER IS NOT GAS. The ring under the player, its green HP bar
+        # and the green name tag all pass the gas colour test. Measured on
+        # media/fixtures/showdown.png (no gas anywhere): every one of the
+        # ~2.8k "gas" pixels sat within x +-1.3r, y -1.4r..+2.7r of the
+        # anchor, and the brain, seeing gas a tile away, spent its time in
+        # gas-escape mode, running from a cloud that was not there. Blank that
+        # box (with margin) before pooling the grid and the side/centroid
+        # numbers. `in_gas` above keeps its calibrated window unchanged.
+        r = player_pos[2] * downscale
+        bx0, bx1 = max(0, int(px - SPRITE_BOX[0] * r)), min(sw, int(px + SPRITE_BOX[0] * r))
+        by0, by1 = max(0, int(py - SPRITE_BOX[1] * r)), min(sh, int(py + SPRITE_BOX[2] * r))
+        mask = mask.copy()
+        mask[by0:by1, bx0:bx1] = 0
 
     def cov(region):
         return float(np.count_nonzero(region)) / max(1, region.size)

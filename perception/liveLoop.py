@@ -392,8 +392,13 @@ class LivePerception:
         with self._gs_lock:
             self._gs_result = (raw, time.time() - t0)
 
-    def tick(self, frame):
-        now = time.time()
+    def tick(self, frame, now=None):
+        """`now` (seconds) overrides the wall clock that schedules the stages.
+        Pass the VIDEO time when processing a recording offline: on the wall
+        clock a recording runs many times faster than real time, so the
+        1 s game-state check and the 0.2 s entity refresh fire only every few
+        hundred frames and the match is never even confirmed as started."""
+        now = time.time() if now is None else float(now)
         timings = {}
         c = self.cache
 
