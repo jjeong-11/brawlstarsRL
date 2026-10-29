@@ -159,6 +159,32 @@ pro footage --(camera-motion IDM, HUD reads, "show taps")--> (state features, ac
 - **Exit:** beats the Phase 2 policy in sim, with the advantage holding in
   Friendly Games.
 
+#### Phase 3 results so far
+
+- **`sim/multi.py`:** any seats can be played by the full bot stack, each
+  with its own perception-noise view. 10 agent seats: ~47 s per match.
+  3 agents + 7 scripted bots: agents average 3.50, bots 6.36.
+- **`sim/league.py`, first run:** 6 configs, 12 generations, 16 matches
+  each, 6 agent seats and 4 bots per match, past champions mixed in 20% of
+  the time.
+  - The champion is more aggressive and more loot-focused than the defaults:
+    engage at 1.96x instead of 3.0x, box utility 1.41 instead of 1.0, less
+    camping.
+  - **It is not better.** Against scripted bots on 320 paired seeds it
+    places 3.42 vs the defaults' 3.36: more cubes (3.8 vs 3.4), shorter
+    survival. Head-to-head (48 matches, 3 champion + 3 default seats):
+    -0.17 ± 0.36, not significant. Not adopted.
+  - Why, most likely: fitness estimates from 10-90 noisy matches per config,
+    with no paired seeds, so selection mostly chased noise. The population is
+    also tiny (6) and searches only 6 settings.
+- **Next for Phase 3:**
+  - Paired seeds across all configs in a generation.
+  - Fitness that mixes self-play rank and rank against bots.
+  - A population of ≥ 12, and survivors re-evaluated on fresh seeds before
+    promotion.
+  - Start from the Phase 2 fit to pro footage once it exists, which is what
+    the plan calls for.
+
 ### Phase 4: toward expert level
 - Close the latency gap: capture plus perception plus decision under 150 ms.
 - Fine-tune mechanics (aim lead, dodge) where the bot has a real edge.
