@@ -532,6 +532,7 @@ class SessionRunner:
                     intent = executor.apply(action, **kwargs)
                 m.prev_raw = tuple(intent.raw)
                 if recorder is not None:
+                    recorder.brain = m.brain
                     recorder.maybe_record(frame, t0, tick, episode, state, goal,
                                           intent, combat, m.planner, terrain, screen)
 
@@ -564,7 +565,7 @@ class SessionRunner:
                                for k, v in result.breakdown.items() if abs(v) > 1e-9},
                     game=_game_summary(state, live),
                     decision=_decision_summary(intent, m.planner, action,
-                                               policy_source, combat),
+                                               policy_source, combat, brain=m.brain),
                 )
 
                 sleep_for = period - (time.time() - t0)
@@ -657,6 +658,7 @@ class _Recorder:
         self.last = -1e9
         self.n = 0
         self.backend = cfg.backend if cfg.mode == "control" else "observe"
+        self.brain = None                       # set by the caller each match
         say(f"recording raw frames every {self.every:.1f}s to {self.dir}")
 
     def maybe_record(self, frame, t, tick, episode, state, goal, intent, combat,
@@ -681,6 +683,7 @@ class _Recorder:
             "attack": bool(intent.fire_attack), "super": bool(intent.fire_super),
             "combat": getattr(combat, "reason", None),
             "planner": None if st is None else {"mode": st.mode, "blocked": bool(st.blocked)},
+            "explain": (self.brain.explain(5) if self.brain is not None else None),
             "terrain": bool(terrain),
             "localized": bool(getattr(planner.world, "have_reference", False))
             if planner is not None else False,
@@ -713,7 +716,7 @@ def _game_summary(state, live) -> dict:
     }
 
 
-def _decision_summary(intent, planner, action, policy_source, combat) -> dict:
+def _decision_summary(intent, planner, action, policy_source, combat, brain=None) -> dict:
     st = planner.status() if planner is not None else None
     wp = planner.waypoint_pixels() if planner is not None else None
     return {
@@ -730,6 +733,8 @@ def _decision_summary(intent, planner, action, policy_source, combat) -> dict:
         "combat": [bool(combat[0]), bool(combat[1])],
         "combat_reason": str(getattr(combat, "reason", "")),
         "tactic": getattr(intent, "tactic", None),
+        # xAI: the options the brain scored and what the winner beat.
+        "why_move": brain.explain() if brain is not None else None,
         "waypoint": [round(float(v)) for v in wp] if wp else None,
         "planner": {
             "active": bool(getattr(st, "active", False)),

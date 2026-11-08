@@ -402,6 +402,7 @@ function render(s) {
       : d.policy === 'base' ? 'shared base' : 'random',
       (d.policy === 'brawler' || d.policy === 'tactical') ? 'on' : 'off'],
     ['tactic', d.tactic || '—', d.tactic ? 'info' : 'off'],
+    ['options', d.why_move ? d.why_move.split(' | ')[1] || '—' : '—', d.why_move ? 'info' : 'off'],
     ['aim', d.aim_mode === 'manual'
       ? (d.aim ? `manual ${d.aim[0].toFixed(2)}, ${d.aim[1].toFixed(2)}` : 'manual')
       : 'auto', d.aim_mode === 'manual' ? 'info' : 'off'],

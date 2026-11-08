@@ -556,6 +556,20 @@ class TacticalBrain:
         self.last_goal = g
         return g
 
+    def explain(self, k: int = 3) -> str:
+        """Why the last decision was made, in one line: the chosen option and
+        its reason, then the options it beat with their utilities, e.g.
+        "camp: hidden in bush | camp 2.20 > avoid 2.10 > box 0.81".
+        Every decision is a max over named, scored options, so this is the
+        whole explanation, not a post-hoc guess."""
+        g = self.last_goal
+        scores = getattr(self, "last_scores", None) or {}
+        head = f"{g.mode}: {g.reason}" if g is not None else "-"
+        if not scores:
+            return head
+        ranked = sorted(scores.items(), key=lambda kv: -kv[1])[:k]
+        return head + " | " + " > ".join(f"{m} {v:.2f}" for m, v in ranked)
+
     # ------------------------------------------------------------------ #
     # enemies
     # ------------------------------------------------------------------ #
