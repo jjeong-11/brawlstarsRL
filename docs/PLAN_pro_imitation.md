@@ -151,6 +151,24 @@ pro footage --(camera-motion IDM, HUD reads, "show taps")--> (state features, ac
 - **Exit:** a fitted policy beats the hand-tuned one in the calibrated sim
   and in Friendly Games against bots.
 
+#### Phase 2 status: tooling ready, waiting for footage
+
+- `tools/fit_from_footage.py` has `perceive` (cached), `score`, `fit` and
+  `calibrate`. It runs end-to-end on synthetic footage built from a real
+  frame.
+- Building it surfaced two real bugs:
+  - **Phantom gas.** The player's own ring, HP bar and name read as gas,
+    which put the brain in gas-escape mode with no gas on screen. Fixed in
+    `perception/getGas.py`.
+  - **Wall-clock scheduling.** Perception scheduled its stages by wall
+    clock, so offline footage never registered a match. Fixed with
+    `LivePerception.tick(now=)`.
+- `python -m sim.calibration` turns `calibrate`'s output into simulator
+  settings (gas start, agent speed) and compares elimination curves.
+  `sim.evaluate --calibration` applies them.
+- Explanations (xAI): `TacticalBrain.explain()` shows the chosen option, its
+  reason and the options it beat, in the web UI and the frame recorder.
+
 ### Phase 3: self-play in the calibrated sim
 - Feature-based, option-level policy initialised from the Phase 2 fit.
 - Population training with past snapshots as opponents (OpenAI Five style:
