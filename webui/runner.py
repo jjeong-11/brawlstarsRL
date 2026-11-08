@@ -104,6 +104,14 @@ class SessionConfig:
     # perception can be debugged on your phone's real screen).
     record_frames: bool = False
     record_every_s: float = 2.0
+    # The live picture costs more than every decision stage together
+    # (median ~45 ms, spikes ~250 ms: drawing + JPEG) and is cosmetic, so it
+    # is drawn at most this often. Stale information and lag are what cost
+    # the bot (docs/PLAN_pro_imitation.md, noise/latency sweep).
+    view_fps: float = 3.0
+    # Gas moves slowly; the scan (~14 ms) runs at most this often and the
+    # world map keeps the last reading in between.
+    gas_every_s: float = 0.4
     deterministic: bool = False           # policy.predict(deterministic=...)
     # Who decides where to move:
     #   "tactical" rl/tactics.py, the scripted Showdown strategy
@@ -385,6 +393,7 @@ class SessionRunner:
             frame_times: Deque[float] = collections.deque(maxlen=20)
             period = 1.0 / cfg.fps
             recorder = _Recorder(cfg, self._say) if cfg.record_frames else None
+            last_gas = last_view = -1e9
 
             while not self._stop.is_set():
                 t0 = time.time()
@@ -475,11 +484,14 @@ class SessionRunner:
                     except Exception:
                         terrain = None
                 rect = terrain["rect"] if terrain else play_rect(frame)
-                try:
-                    gas = gas_info(frame, player_pos=player_anchor(state), grid_rect=rect,
-                                   grid_size=(GRID_W, GRID_H))["grid"]
-                except Exception:
-                    gas = None
+                gas = None
+                if t0 - last_gas >= cfg.gas_every_s:
+                    last_gas = t0
+                    try:
+                        gas = gas_info(frame, player_pos=player_anchor(state), grid_rect=rect,
+                                       grid_size=(GRID_W, GRID_H))["grid"]
+                    except Exception:
+                        gas = None
                 if terrain is None and rect is not None:
                     m.planner.world.set_geometry(rect, (GRID_W, GRID_H))
 
@@ -537,17 +549,21 @@ class SessionRunner:
                                           intent, combat, m.planner, terrain, screen)
 
                 # --- the picture ------------------------------------------ #
-                try:
-                    annotated = tracer.render(frame, m.planner, state, intent=intent,
-                                              reward=result, live=live, tick=tick)
-                    ok_enc, buf = cv2.imencode(
-                        ".jpg", annotated,
-                        [cv2.IMWRITE_JPEG_QUALITY, trace_cfg.jpeg_quality])
-                    if ok_enc:
-                        self._publish_frame(buf.tobytes())
-                except Exception as e:
-                    # Never take the loop down for a drawing bug.
-                    self._say(f"render failed: {e!r}")
+                draw = (t0 - last_view >= 1.0 / max(0.1, cfg.view_fps)) or cfg.save_traces
+                if draw:
+                    last_view = t0
+                if draw:
+                    try:
+                        annotated = tracer.render(frame, m.planner, state, intent=intent,
+                                                  reward=result, live=live, tick=tick)
+                        ok_enc, buf = cv2.imencode(
+                            ".jpg", annotated,
+                            [cv2.IMWRITE_JPEG_QUALITY, trace_cfg.jpeg_quality])
+                        if ok_enc:
+                            self._publish_frame(buf.tobytes())
+                    except Exception as e:
+                        # Never take the loop down for a drawing bug.
+                        self._say(f"render failed: {e!r}")
 
                 if cfg.save_traces:
                     tracer.capture(frame, m.planner, state, intent=intent,
