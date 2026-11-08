@@ -162,4 +162,5 @@ Not built yet (next steps):
 | Imitation fit (sim, movement only) | fitted 3.73 vs demonstrator 3.71 mean place |
 | scrcpy control / video | pass against fake servers; **unverified on a phone** |
 | Phantom gas fix | 1 -> 0 false gas cells on a clean frame; **unverified on a phone** |
+| League self-play v2 (paired) | champion +0.14 ± 0.15 vs bots, +0.44 ± 0.33 head-to-head: **no gain**; the defaults are a local optimum for these 6 settings |
 | League self-play (first run) | champion 3.42 vs defaults 3.36 against bots (320 seeds); head-to-head -0.17 ± 0.36: **no gain, not adopted** |

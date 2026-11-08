@@ -217,7 +217,23 @@ and latency on the phone first (handoff section 1).
   - Why, most likely: fitness estimates from 10-90 noisy matches per config,
     with no paired seeds, so selection mostly chased noise. The population is
     also tiny (6) and searches only 6 settings.
-- **Next for Phase 3:**
+- **`sim/league.py --paired`, second run (v2):**
+  - Every candidate played the same seeds against the same rivals, with
+    fitness half self-play and half against bots. Population 8, 6
+    generations; the champion needed 3 or more generations of history.
+  - The champion camps less (0.52 vs 0.9) and avoids a little less.
+  - **Also not better:** +0.14 ± 0.15 mean place against bots (320 paired
+    seeds) and +0.44 ± 0.33 head-to-head (48 matches). Not adopted.
+- **Conclusion:** two leagues and the earlier random search
+  (`sim/search.py`) all fail to beat the current defaults. In this
+  6-setting space and this uncalibrated simulator, the defaults are a local
+  optimum. More self-play over the same knobs is not worth the CPU.
+  Self-play becomes worth running again once there is:
+  - a richer policy space (new options or behaviours, not re-weighting the
+    existing ones);
+  - a sim calibrated from footage (Phase 2);
+  - a starting point fitted to pro play.
+- **Earlier next steps (now done or superseded):**
   - Paired seeds across all configs in a generation.
   - Fitness that mixes self-play rank and rank against bots.
   - A population of ≥ 12, and survivors re-evaluated on fresh seeds before
