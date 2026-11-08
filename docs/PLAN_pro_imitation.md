@@ -140,6 +140,28 @@ pro footage --(camera-motion IDM, HUD reads, "show taps")--> (state features, ac
   (`python -m sim.imitate`, without `--fit`) reports how much agreement any
   settings leave unexplained.
 
+#### Noise and latency sweep: speed matters, accuracy hardly does
+
+`sim.evaluate`, 160 paired seeds (7000-7159), each arm against the default
+perception model (mean place 3.53):
+
+| Change | Mean place vs default |
+|---|---|
+| perfect perception | +0.04 ± 0.24 |
+| more detection misses + jitter (`enemy_miss` 0.3, 24 px) | -0.01 ± 0.22 |
+| unreliable player anchor (40% misses, 15 px jitter) | +0.11 ± 0.26 |
+| no enemy HP / cube reads | -0.04 ± 0.12 |
+| camera noise 6 px | -0.01 ± 0.23 |
+| **entities refreshed every 0.6 s** (screencap-speed) | **+0.51 ± 0.23** |
+| **+0.2 s action latency** (`--action-delay 3`) | **+0.29 ± 0.23** |
+| **+0.4 s action latency** (`--action-delay 5`) | **+0.40 ± 0.22** |
+
+In the simulator the decision layer tolerates noisy perception well; what
+costs it is **stale information and lag**. That puts fast capture (1b,
+scrcpy video) and a tight loop ahead of detector accuracy (1d), and it is
+the measurable version of "CV is slow". Measure the loop's real frame age
+and latency on the phone first (handoff section 1).
+
 ### Phase 2: learn from the pros
 - Run the labeller and perception over the footage to get (features, action)
   datasets, split per player.
