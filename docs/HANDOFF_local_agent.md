@@ -63,6 +63,12 @@ Set these in the web UI:
 - Options > Control backend: **scrcpy**.
 - Tick **Record raw frames for debugging**.
 
+Also set Options > Ticks per second to **8**, then check the web UI's fps
+readout keeps up. In the simulator, stale information and lag cost up to
+half a place while perception noise cost nothing measurable (plan,
+"Noise and latency sweep"). With scrcpy capture and the throttled live view
+(`view_fps`), the loop should manage more than the old default of 4.
+
 Play 2-3 Friendly Showdown matches.
 
 Then:
