@@ -89,7 +89,8 @@ def _play(args):
         policy = _policy()
     t0 = time.time()
     r = run_match(controller, brawler, seed=seed, perception=pm, localize=localize,
-                  combat_config=cc, tactics_config=tc, policy=policy)
+                  combat_config=cc, tactics_config=tc, policy=policy,
+                  action_delay=_ACTION_DELAY)
     d = r.as_dict()
     d["wall_s"] = time.time() - t0
     d["label"] = label
@@ -140,8 +141,12 @@ def _policy():
     return PolicyStepper(_MODEL, deterministic=False)
 
 
-def _init_worker(perception, policy_path=None, calibration=None):
-    global _PERCEPTION, _POLICY_PATH
+_ACTION_DELAY = 1
+
+
+def _init_worker(perception, policy_path=None, calibration=None, action_delay=1):
+    global _PERCEPTION, _POLICY_PATH, _ACTION_DELAY
+    _ACTION_DELAY = int(action_delay)
     _PERCEPTION = perception
     _POLICY_PATH = policy_path
     if calibration:
@@ -162,6 +167,8 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=1000, help="first seed")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2)))
     ap.add_argument("--perfect", action="store_true", help="no perception noise")
+    ap.add_argument("--action-delay", type=int, default=1, metavar="TICKS",
+                    help="ticks (0.1 s) between deciding and acting; 1 = default")
     ap.add_argument("--calibration", default=None, metavar="FILE",
                     help="sim calibration JSON from `python -m sim.calibration` "
                          "(gas timing, agent speed measured from footage)")
@@ -208,14 +215,15 @@ def main(argv=None) -> int:
         import multiprocessing as mp
         with mp.get_context("spawn").Pool(
                 args.workers, initializer=_init_worker,
-                initargs=(_parse_overrides(args.perception), args.policy, calib)) as pool:
+                initargs=(_parse_overrides(args.perception), args.policy, calib,
+                          args.action_delay)) as pool:
             for k, d in enumerate(pool.imap_unordered(_play, jobs, chunksize=1)):
                 rows.append(d)
                 if (k + 1) % max(1, len(jobs) // 10) == 0:
                     print(f"  {k + 1}/{len(jobs)} matches ({time.time() - t0:.0f}s)",
                           flush=True)
     else:
-        _init_worker(_parse_overrides(args.perception), args.policy, calib)
+        _init_worker(_parse_overrides(args.perception), args.policy, calib, args.action_delay)
         for job in jobs:
             rows.append(_play(job))
 
