@@ -124,8 +124,11 @@ Sanity checks before trusting a fit:
 Not built yet (next steps):
 - Reading "Show taps" circles (exact joystick and aim positions) in
   `tools/label_footage.py`.
-- Feeding `calibrate`'s output back into `sim/arena.py`'s `ArenaConfig`
-  (gas start, end and speeds).
+- (Done since: `python -m sim.calibration doin_calib.json --out sim_calib.json`
+  turns `calibrate`'s output into simulator settings, namely the gas start
+  (an upper bound) and the agent's speed. It also prints the sim's
+  elimination curve next to the footage's. Then use
+  `python -m sim.evaluate ... --calibration sim_calib.json`.)
 
 ---
 

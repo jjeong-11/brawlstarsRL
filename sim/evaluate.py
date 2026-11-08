@@ -140,10 +140,13 @@ def _policy():
     return PolicyStepper(_MODEL, deterministic=False)
 
 
-def _init_worker(perception, policy_path=None):
+def _init_worker(perception, policy_path=None, calibration=None):
     global _PERCEPTION, _POLICY_PATH
     _PERCEPTION = perception
     _POLICY_PATH = policy_path
+    if calibration:
+        from sim import harness
+        harness.CALIBRATION.update(calibration)
     try:
         import torch
         torch.set_num_threads(1)        # one match per process already
@@ -159,6 +162,9 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=1000, help="first seed")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2)))
     ap.add_argument("--perfect", action="store_true", help="no perception noise")
+    ap.add_argument("--calibration", default=None, metavar="FILE",
+                    help="sim calibration JSON from `python -m sim.calibration` "
+                         "(gas timing, agent speed measured from footage)")
     ap.add_argument("--perception", default="", metavar="K=V,...",
                     help="PerceptionModel overrides, e.g. entity_interval_s=0.2")
     ap.add_argument("--policy", default=None, metavar="PATH",
@@ -175,6 +181,11 @@ def main(argv=None) -> int:
                     help="TacticsConfig overrides, paired with --combat by "
                          "position (missing = defaults)")
     args = ap.parse_args(argv)
+    calib = None
+    if args.calibration:
+        import json as _json
+        calib = _json.loads(pathlib.Path(args.calibration).read_text())
+        print(f"calibration: {calib}")
 
     controllers = [c.strip() for c in args.controllers.split(",") if c.strip()]
     brawlers = [b.strip() for b in args.brawlers.split(",") if b.strip()]
@@ -197,14 +208,14 @@ def main(argv=None) -> int:
         import multiprocessing as mp
         with mp.get_context("spawn").Pool(
                 args.workers, initializer=_init_worker,
-                initargs=(_parse_overrides(args.perception), args.policy)) as pool:
+                initargs=(_parse_overrides(args.perception), args.policy, calib)) as pool:
             for k, d in enumerate(pool.imap_unordered(_play, jobs, chunksize=1)):
                 rows.append(d)
                 if (k + 1) % max(1, len(jobs) // 10) == 0:
                     print(f"  {k + 1}/{len(jobs)} matches ({time.time() - t0:.0f}s)",
                           flush=True)
     else:
-        _init_worker(_parse_overrides(args.perception), args.policy)
+        _init_worker(_parse_overrides(args.perception), args.policy, calib)
         for job in jobs:
             rows.append(_play(job))
 

@@ -366,6 +366,10 @@ def playable_maps():
 
 _BUSH = {}
 
+# Calibration from real footage (sim/calibration.py): {"arena": {ArenaConfig
+# field: value}, "agent_speed": tiles/s}. Empty = the built-in guesses.
+CALIBRATION: dict = {}
+
 
 def build_match(seed: int, brawler: str = "shelly", map_name: Optional[str] = None,
                 bot_skill: Tuple[float, float] = (0.25, 1.0)):
@@ -392,7 +396,15 @@ def build_match(seed: int, brawler: str = "shelly", map_name: Optional[str] = No
     stats = [stats_for(ability)] + [stats_for(rng.choice(pool)) for _ in range(9)]
     if gm.name not in _BUSH:
         _BUSH[gm.name] = bush_mask(gm)
-    arena = Arena(gm, _BUSH[gm.name], stats, seed=seed)
+    arena_cfg = None
+    if CALIBRATION:
+        import dataclasses
+        from .arena import ArenaConfig
+        if CALIBRATION.get("arena"):
+            arena_cfg = dataclasses.replace(ArenaConfig(), **CALIBRATION["arena"])
+        if CALIBRATION.get("agent_speed"):
+            stats[0] = dataclasses.replace(stats[0], speed=float(CALIBRATION["agent_speed"]))
+    arena = Arena(gm, _BUSH[gm.name], stats, config=arena_cfg, seed=seed)
     bots = [Bot(arena, i, BotSkill.sample(rng, *bot_skill), random.Random(seed * 101 + i))
             for i in range(1, len(stats))]
     return arena, bots, ability, gm
