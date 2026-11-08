@@ -52,6 +52,99 @@ def default_cfg() -> dict:
     return {k: getattr(d, k) for k in SPACE}
 
 
+def _paired_job(job):
+    """One candidate on one seed: a self-play match (candidate in seat 0,
+    fixed rivals, bots elsewhere) AND a single-agent match against bots on
+    the same seed. Every candidate in a generation gets the same jobs, so
+    differences between candidates are paired."""
+    seed, cand, rivals = job
+    from sim.harness import run_match
+    from sim.multi import run_multi
+    import dataclasses
+    from rl.tactics import TacticsConfig
+    seats = {0: dict(cand)}
+    for i, r in enumerate(rivals, start=1):
+        seats[i] = dict(r)
+    res = run_multi(seed, seats)
+    sp = next(p["rank"] for p in res if p["seat"] == 0)
+    tc = dataclasses.replace(TacticsConfig(seed=seed), **cand)
+    vb = run_match("tactical", "shelly", seed=seed, tactics_config=tc).rank
+    return sp, vb
+
+
+def paired(a) -> int:
+    """League v2: paired seeds and rivals, mixed fitness, survivors re-scored."""
+    rng = random.Random(a.seed)
+    pop = [default_cfg()] + [perturb(default_cfg(), rng, a.sigma) for _ in range(a.population - 1)]
+    hist = {i: [] for i in range(len(pop))}       # per-candidate list of per-gen fitness
+    ids = list(range(len(pop)))
+    next_id = len(pop)
+    cfg_of = dict(zip(ids, pop))
+    fame: List[dict] = []
+    out = open(a.out, "a")
+    t0 = time.time()
+    seed = a.seed
+    for gen in range(a.generations):
+        seeds = list(range(seed, seed + a.matches))
+        seed += a.matches
+        # Same rivals for every candidate on a given seed: current members and
+        # past champions, drawn once per seed.
+        rivals = {}
+        for s in seeds:
+            pool_ = [cfg_of[i] for i in ids] + fame
+            rivals[s] = [rng.choice(pool_) for _ in range(a.agent_seats - 1)]
+        jobs = [(s, cfg_of[i], rivals[s]) for i in ids for s in seeds]
+        with mp.get_context("spawn").Pool(a.workers) as pool:
+            res = pool.map(_paired_job, jobs, chunksize=1)
+        k = 0
+        scores = {}
+        for i in ids:
+            sp = vb = 0.0
+            for _ in seeds:
+                r_sp, r_vb = res[k]
+                k += 1
+                sp += r_sp
+                vb += r_vb
+            sp /= len(seeds)
+            vb /= len(seeds)
+            scores[i] = (a.selfplay_weight * sp + (1 - a.selfplay_weight) * vb, sp, vb)
+            hist[i].append(scores[i][0])
+
+        def fit(i):
+            return sum(hist[i]) / len(hist[i])
+
+        ranked = sorted(ids, key=fit)
+        line = {"gen": gen, "t": round(time.time() - t0),
+                "pop": [{"id": i, "fitness": round(fit(i), 3), "gens": len(hist[i]),
+                         "this_gen": [round(v, 3) for v in scores[i]], "cfg": cfg_of[i]}
+                        for i in ranked]}
+        out.write(json.dumps(line) + "\n")
+        out.flush()
+        best = ranked[0]
+        d = next(i for i in ids if cfg_of[i] == default_cfg()) if default_cfg() in cfg_of.values() else None
+        print(f"[{line['t']:5d}s] gen {gen:2d}: best #{best} fitness {fit(best):.2f} over {len(hist[best])} gen(s) "
+              f"(self-play {scores[best][1]:.2f}, vs bots {scores[best][2]:.2f})"
+              + (f"; defaults {fit(d):.2f}" if d is not None else "") + f"  {cfg_of[best]}", flush=True)
+        # Hall of fame gets champions with at least two generations of history.
+        if len(hist[best]) >= 2:
+            fame.append(dict(cfg_of[best]))
+            fame[:] = fame[-6:]
+        keep = ranked[:a.keep]
+        children = []
+        for j in range(len(ids) - a.keep):
+            parent = cfg_of[keep[j % len(keep)]]
+            children.append(next_id)
+            cfg_of[next_id] = perturb(parent, rng, a.sigma)
+            hist[next_id] = []
+            next_id += 1
+        ids = keep + children
+    scored = [i for i in hist if hist[i]]
+    final = sorted([i for i in scored if len(hist[i]) >= 3] or scored,
+                   key=lambda i: sum(hist[i]) / len(hist[i]))
+    print("CHAMPION", json.dumps(cfg_of[final[0]]))
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--population", type=int, default=6)
@@ -63,7 +156,13 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=20000)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--out", default="league.jsonl")
+    ap.add_argument("--paired", action="store_true",
+                    help="v2: paired seeds and rivals, mixed fitness (see paired())")
+    ap.add_argument("--keep", type=int, default=4)
+    ap.add_argument("--selfplay-weight", type=float, default=0.5)
     a = ap.parse_args(argv)
+    if a.paired:
+        return paired(a)
 
     rng = random.Random(a.seed)
     next_id = [0]
