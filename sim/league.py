@@ -121,7 +121,7 @@ def paired(a) -> int:
         out.write(json.dumps(line) + "\n")
         out.flush()
         best = ranked[0]
-        d = next(i for i in ids if cfg_of[i] == default_cfg()) if default_cfg() in cfg_of.values() else None
+        d = next((i for i in ids if cfg_of[i] == default_cfg()), None)   # defaults, while alive
         print(f"[{line['t']:5d}s] gen {gen:2d}: best #{best} fitness {fit(best):.2f} over {len(hist[best])} gen(s) "
               f"(self-play {scores[best][1]:.2f}, vs bots {scores[best][2]:.2f})"
               + (f"; defaults {fit(d):.2f}" if d is not None else "") + f"  {cfg_of[best]}", flush=True)
