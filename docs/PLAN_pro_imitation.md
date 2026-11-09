@@ -162,6 +162,45 @@ scrcpy video) and a tight loop ahead of detector accuracy (1d), and it is
 the measurable version of "CV is slow". Measure the loop's real frame age
 and latency on the phone first (handoff section 1).
 
+#### Where the defaults lose places, and new behaviours tried against it
+
+Loss breakdown (320 seeds, defaults, mean place 3.36):
+
+| Where places are lost | Share |
+|---|---|
+| enemy kills, finishing 7th-10th | 40% |
+| enemy kills, finishing 4th-6th | 30% |
+| enemy kills, finishing 2nd-3rd | 17% |
+| gas, all stages | 12% |
+
+Of the early enemy deaths, 45 of 54 happened while retreating. In the
+median case the enemy was first seen at 5.8 tiles (already in range), both
+sides were at full HP, it held 4 cubes to our 1, and the chase lasted 1.3 s.
+The fight is lost on first sight.
+
+New behaviours tried against that, each on 320 paired seeds vs the defaults:
+
+| Behaviour | Result | Early enemy deaths (default 100) |
+|---|---|---|
+| Retreat into bushes (`retreat_bush_bonus` 6) | **+0.23 ± 0.11 worse** | 113 |
+| Stay hidden rather than run (`hide_when_hunted`) | +0.12 ± 0.10 | 106 |
+| Both | +0.17 ± 0.12 | 108 |
+| Stealth routing through bushes (`planner.bush_discount` 0.5) | +0.16 ± 0.12 | 109 |
+| Same, 0.75 | **+0.27 ± 0.14 worse** | 119 |
+| Wider berth around visible enemies (`planner.enemy_radius` 0.4) | +0.02 ± 0.08 | 102 |
+
+None adopted; all remain available as settings.
+
+Headroom check: the simulator's top-skill scripted bot, given perfect
+information and no latency, places **5.03** in our seat. Our bot places
+3.36, well ahead of the opponents it is tuned against. Retuning is exhausted
+(random search, two leagues), and evasion tweaks do not pay in this sim.
+**Further gains need the real game's data:**
+- footage-calibrated opponents (how hard and how early real players fight);
+- pro-fitted decisions (Phase 2);
+- the phone-side speed fixes, which the noise/latency sweep says are worth
+  up to 0.5 place.
+
 ### Phase 2: learn from the pros
 - Run the labeller and perception over the footage to get (features, action)
   datasets, split per player.
