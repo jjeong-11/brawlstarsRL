@@ -186,6 +186,20 @@ class TacticsConfig:
     # cubes while the lobby is spread out, hide once it gets crowded.
     camp_max_players: int = 0
     hidden_utility: float = 2.2
+    # HIDE, DON'T RUN. Measured in sim/ (160 seeds): 70% of lost places are
+    # early deaths to an enemy, 45 of 54 of them while retreating. The enemy
+    # was first seen at a median 5.8 tiles, already in range, with ~4 cubes
+    # to our 1, and the chase lasted a median 1.3 s: running in the open from
+    # a stronger enemy that has seen you does not work. 11 of those 45 began
+    # hidden in a bush, and the bot ran OUT of it (avoid outranked hiding);
+    # in 17 a bush was within 2 tiles. Enemies cannot see into a bush unless
+    # within `bush_see_tiles`, so cover breaks the chase.
+    #   retreat_bush_bonus: score (in tiles of distance) a retreat point gets
+    #                       for being in a bush (was a fixed 1.5).
+    #   hide_when_hunted:   in a bush with no enemy close enough to see in,
+    #                       staying hidden outranks avoid-retreat.
+    retreat_bush_bonus: float = 1.5
+    hide_when_hunted: bool = False
     camp_radius_tiles: float = 9.0
     bush_see_tiles: float = 2.5
     commit_hp_margin: float = 0.15
@@ -490,7 +504,12 @@ class TacticalBrain:
                          and e["dist"] <= cfg.bush_see_tiles * ppt]
             if in_bush and enemies and not near_eyes and not fight_ok and not in_gas \
                     and (gas_d is None or gas_d > cfg.gas_urgent_tiles):
-                cand["camp"] = (cfg.hidden_utility, None, "hidden in bush")
+                u = cfg.hidden_utility
+                if cfg.hide_when_hunted:
+                    # Running out of the bush makes us visible to the enemy
+                    # we are running from; staying in it does not.
+                    u = max(u, cfg.avoid_utility + 0.1)
+                cand["camp"] = (u, None, "hidden in bush")
             else:
                 bp = self._camp_point(world, px, py, zone, ppt, short)
                 if bp is not None:
@@ -706,7 +725,7 @@ class TacticalBrain:
                 if world is not None and world.ready():
                     if any(self._walled(world, (cx, cy), t) for t in tpos[:2]):
                         s += 2.5
-                    s += 1.5 * self._bush_at(world, cx, cy)
+                    s += cfg.retreat_bush_bonus * self._bush_at(world, cx, cy)
                     s -= 8.0 * self._gas_at(world, cx, cy, dilated=planner)
                     s -= 2.0 * self._edge_risk(world, cx, cy)
                     if cfg.retreat_gas_weight:
