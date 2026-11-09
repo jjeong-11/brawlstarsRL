@@ -71,9 +71,17 @@ def _configs(controller, combat_over, tactics_over, seed):
     if combat_over:
         base = legacy_combat_config() if controller == "legacy" else CombatConfig()
         cc = dataclasses.replace(base, **combat_over)
+    tactics_over = dict(tactics_over or {})
+    # "planner.<field>=v" in a --tactics arm sets PathPlannerConfig.<field>.
+    planner_over = {k[len("planner."):]: tactics_over.pop(k)
+                    for k in list(tactics_over) if k.startswith("planner.")}
     if tactics_over:
         tc = dataclasses.replace(TacticsConfig(seed=seed), **tactics_over)
-    return cc, tc
+    pc = None
+    if planner_over:
+        from rl.path_planner import PathPlannerConfig
+        pc = dataclasses.replace(PathPlannerConfig(), **planner_over)
+    return cc, tc, pc
 
 
 def _play(args):
@@ -83,14 +91,14 @@ def _play(args):
     pm = PerceptionModel.perfect() if perfect else PerceptionModel()
     if _PERCEPTION:
         pm = dataclasses.replace(pm, **_PERCEPTION)
-    cc, tc = _configs(controller, combat_over, tactics_over, seed)
+    cc, tc, pc = _configs(controller, combat_over, tactics_over, seed)
     policy = None
     if controller == "policy":
         policy = _policy()
     t0 = time.time()
     r = run_match(controller, brawler, seed=seed, perception=pm, localize=localize,
                   combat_config=cc, tactics_config=tc, policy=policy,
-                  action_delay=_ACTION_DELAY)
+                  action_delay=_ACTION_DELAY, planner_config=pc)
     d = r.as_dict()
     d["wall_s"] = time.time() - t0
     d["label"] = label

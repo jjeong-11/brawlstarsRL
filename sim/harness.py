@@ -284,7 +284,7 @@ class AgentStack:
     def __init__(self, controller: str, ability=None, seed: int = 0,
                  combat_config=None, tactics_config=None,
                  policy: Optional[Callable] = None, localize: bool = True,
-                 tick_seconds: float = 0.1):
+                 tick_seconds: float = 0.1, planner_config=None):
         from rl.combat import CombatConfig, CombatPolicy
         from rl.enemy_tracker import EnemyTracker
         from rl.path_planner import WaypointPlanner
@@ -299,7 +299,7 @@ class AgentStack:
                              else CombatConfig(tick_seconds=tick_seconds))
         self.combat = CombatPolicy(combat_config, ability=ability)
         self.tracker = None if controller == "legacy" else EnemyTracker()
-        self.planner = WaypointPlanner(localize=localize)
+        self.planner = WaypointPlanner(planner_config, localize=localize)
         tcfg = tactics_config or TacticsConfig(seed=seed, tick_seconds=tick_seconds)
         self.brain = TacticalBrain(tcfg, ability=ability, combat=self.combat)
         self.policy = policy
@@ -444,8 +444,8 @@ def run_match(controller: str = "tactical", brawler: str = "shelly", seed: int =
               dt: float = 0.1, action_delay: int = 1, localize: bool = True,
               combat_config=None, tactics_config=None, policy=None,
               bot_skill: Tuple[float, float] = (0.25, 1.0),
-              stop_on_death: bool = True, on_tick: Optional[Callable] = None
-              ) -> MatchResult:
+              stop_on_death: bool = True, on_tick: Optional[Callable] = None,
+              planner_config=None) -> MatchResult:
     """Play one seeded match. Same seed => same map, spawns, bots and boxes."""
     from .bots import Bot, BotSkill
 
@@ -454,7 +454,8 @@ def run_match(controller: str = "tactical", brawler: str = "shelly", seed: int =
     agent = AgentStack("idle" if controller == "bot" else controller, ability=ability,
                        seed=seed, combat_config=combat_config,
                        tactics_config=tactics_config, policy=policy,
-                       localize=localize and controller != "bot", tick_seconds=dt)
+                       localize=localize and controller != "bot", tick_seconds=dt,
+                       planner_config=planner_config)
     # Reference arm: a top-skill scripted bot in the agent's seat, with
     # PERFECT information and no latency -- an upper bound on what the
     # scripted opponents' own strategy achieves from the same spawn.
