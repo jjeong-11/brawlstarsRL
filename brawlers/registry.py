@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import json
 import pathlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
 _HERE = pathlib.Path(__file__).resolve().parent

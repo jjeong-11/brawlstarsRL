@@ -108,17 +108,6 @@ class TacticsConfig:
     # More than this many enemies within threat radius is a third-party
     # waiting to happen; only a nearly dead target justifies staying.
     max_enemies_engaged: int = 1
-    # THIRD-PARTY. An enemy that is losing health while another enemy stands
-    # within `busy_tiles` of it is busy trading shots; both are spending HP on
-    # each other, and the kill drops cubes. Engage it at `busy_engage_ratio`
-    # (judged against the busy target alone, its duelling partner not counted
-    # as a crowd). 0 disables.
-    busy_engage_ratio: float = 0.0
-    busy_tiles: float = 7.0
-    # Retreat/avoid points closer than gas_margin_tiles to the gas lose this
-    # much score per tile: running from one enemy into the closing gas is how
-    # a lot of finals are lost. 0 = only the gas itself is penalised.
-    retreat_gas_weight: float = 0.0
     # Once the localiser has identified the arena, use its exact centre as
     # the zone (instead of the local inward estimate from the gas boundary).
     # OFF: measured in sim/ over 320 paired matches, the exact centre cost
@@ -126,53 +115,15 @@ class TacticsConfig:
     # for the true middle walks into the crowd; the local estimate keeps the
     # survival-first agent near the edge of the safe ground.
     zone_from_reference: bool = False
-    # ROUTE-AWARE GAS (needs the localiser's lock). The straight-line gas
-    # distance says nothing about the WALK out: measured in sim/, 11 of 20
-    # gas deaths were in pockets whose route to safe ground was 11-28 tiles
-    # when the gas arrived, and the agent only started moving 6-9 s before.
-    # With the arena centre known, the gas front's half-width and closing rate
-    # are measured, the walking route to ground `route_gas_depth_tiles`
-    # inside the front is found, and the agent leaves when walking it would
-    # take longer than the gas needs to arrive, minus `route_gas_buffer_s`.
-    route_gas: bool = False
-    route_gas_depth_tiles: float = 3.0
-    route_gas_buffer_s: float = 5.0
-    route_gas_every: int = 5               # ticks between route searches
-    walk_speed_tiles: float = 2.2          # if the ability does not say
-    gas_rate_prior: float = 0.25           # tiles/s the front closes, per side
-    # COMMIT RATHER THAN RUN. A chasing enemy is as fast as you, so turning
-    # your back on one already this close (tiles) just means being shot for
-    # free. When the lone threat is within this distance and is not clearly
-    # healthier than us (hp fraction no more than `commit_hp_margin` above
-    # ours), fight it out instead of retreating. 0 disables.
-    stand_and_fight_tiles: float = 0.0
-    # EARLY-GAME CAUTION. Placement is decided by the deaths you avoid, and
-    # measured in sim/ the losses cluster early: 18 of 42 fatal fights began
-    # in the first minute, mostly while engaging or grabbing a cube, against a
-    # killer carrying more cubes. While more than `early_players` remain,
-    # fights need `early_engage_ratio`, avoiding a visible enemy outranks
-    # collecting, and loot inside an enemy's reach is not worth the walk.
-    early_players: int = 0
-    # Endgame: with players_left <= late_game_players the zone forces the
-    # fight anyway, so take it on our terms at this ratio. 0 = engage_ratio.
-    late_engage_ratio: float = 0.0
-    early_engage_ratio: float = 1.6
+    # Settings for behaviours that were measured in sim/ and rejected have been
+    # removed (third-party engage, gas-aware retreat, route-aware gas, stand
+    # and fight, early/late engage ratios, late avoid radius, retreat juking,
+    # camping only late, bush retreat, hide when hunted): the experiments and
+    # their numbers are in docs/PLAN_pro_imitation.md and the git history.
     avoid_utility: float = 3.0
-    # Keep at least this far (tiles) from an enemy we will not fight. 0 =
-    # enemy_range_tiles + 1.5. Remembered (bush-hidden) enemies count too
-    # when `avoid_hidden` is on.
+    # Keep at least this far (tiles) from a VISIBLE enemy we will not fight.
+    # 0 = enemy_range_tiles + 1.5.
     avoid_radius_tiles: float = 11.0
-    avoid_hidden: bool = False
-    # In the endgame (players_left <= late_game_players) the safe zone is too
-    # small to keep 11 tiles from everyone; insisting walks into the gas.
-    # 0 = use avoid_radius_tiles throughout.
-    late_avoid_radius_tiles: float = 0.0
-    # Zig-zag while fleeing: rotate the escape step by +/- this many degrees,
-    # flipping with the strafe timer. Opponents lead their shots from our
-    # velocity, so a straight retreat is the easiest target there is.
-    # 0 disables.
-    retreat_juke_deg: float = 0.0
-    retreat_juke_reach: float = 0.25          # of the short side
     loot_threat_penalty: float = 1.0
 
     # --- bush camping ---------------------------------------------------- #
@@ -182,27 +133,9 @@ class TacticsConfig:
     # offer (0 disables); while hidden with an unfavourable enemy in view,
     # staying put and silent outranks running (`hidden_utility`).
     camp_utility: float = 0.9
-    # Camp only once at most this many players remain (0 = always): farm
-    # cubes while the lobby is spread out, hide once it gets crowded.
-    camp_max_players: int = 0
     hidden_utility: float = 2.2
-    # HIDE, DON'T RUN. Measured in sim/ (160 seeds): 70% of lost places are
-    # early deaths to an enemy, 45 of 54 of them while retreating. The enemy
-    # was first seen at a median 5.8 tiles, already in range, with ~4 cubes
-    # to our 1, and the chase lasted a median 1.3 s: running in the open from
-    # a stronger enemy that has seen you does not work. 11 of those 45 began
-    # hidden in a bush, and the bot ran OUT of it (avoid outranked hiding);
-    # in 17 a bush was within 2 tiles. Enemies cannot see into a bush unless
-    # within `bush_see_tiles`, so cover breaks the chase.
-    #   retreat_bush_bonus: score (in tiles of distance) a retreat point gets
-    #                       for being in a bush (was a fixed 1.5).
-    #   hide_when_hunted:   in a bush with no enemy close enough to see in,
-    #                       staying hidden outranks avoid-retreat.
-    retreat_bush_bonus: float = 1.5
-    hide_when_hunted: bool = False
     camp_radius_tiles: float = 9.0
     bush_see_tiles: float = 2.5
-    commit_hp_margin: float = 0.15
 
     # --- gas ---------------------------------------------------------------- #
     # Keep at least this far (tiles) from known gas. The cloud advances
@@ -294,8 +227,6 @@ class TacticalBrain:
         self._strafe_sign = 1.0
         self._strafe_next = 0
         self._explore_heading: Optional[float] = None
-        self._gas_hist: list = []
-        self._route = None
         self._explore_until = 0
         self._zone_dir: Optional[Point] = None       # smoothed inward direction
         self._blacklist = {}                          # track id -> until tick
@@ -327,19 +258,6 @@ class TacticalBrain:
             if e["visible"] and hypot(e["pos"][0] - pt[0], e["pos"][1] - pt[1]) <= reach:
                 return cfg.loot_threat_penalty
         return 0.0
-
-    def _juke(self, world, px, py, point, short) -> Point:
-        """A short escape step rotated off the escape direction (see
-        retreat_juke_deg); falls back to the plain point if it is not
-        standable."""
-        cfg = self.config
-        ang = atan2(point[1] - py, point[0] - px) + \
-            self._strafe_sign * cfg.retreat_juke_deg * pi / 180.0
-        r = cfg.retreat_juke_reach * short
-        q = (px + cos(ang) * r, py + sin(ang) * r)
-        if world is not None and world.ready() and not self._standable(world, q[0], q[1]):
-            return point
-        return q
 
     def _long_range(self) -> bool:
         a = self.ability
@@ -389,8 +307,6 @@ class TacticalBrain:
         if self._retreating and hp_frac >= cfg.reengage_hp:
             self._retreating = False
 
-        tracks = tracker.enemies() if tracker is not None else []
-        tick_now = tracker.tick if tracker is not None else 0
         enemies = self._enemy_views(state, tracker, px, py)
         threat_r = cfg.threat_radius_tiles * ppt
         threats = [e for e in enemies if e["dist"] <= threat_r]
@@ -421,25 +337,8 @@ class TacticalBrain:
                            self._gas_goal(world, px, py, zone, short, ppt),
                            f"gas {gas_d:.1f}t away")
 
-        # ROUTE GAS: the walk out is longer than the time left.
-        rg = self._route_gas(world, px, py, ppt) if cfg.route_gas else None
-        if rg is not None:
-            u, pt, why = rg
-            if "gas" not in cand or cand["gas"][0] < u:
-                cand["gas"] = (u, pt, why)
-
         # Fight assessment against the best visible target.
         target, fight_ok, why = self._pick_target(state, enemies, hp_frac, ppt, reach)
-
-        # Cornered: running from a close, no-stronger enemy only gets you
-        # shot in the back. Treat it as a fight (see stand_and_fight_tiles).
-        if (target is not None and cfg.stand_and_fight_tiles > 0
-                and len(threats) <= 1
-                and target["dist"] <= cfg.stand_and_fight_tiles * ppt):
-            t_frac = target["hp_frac"] if target["hp_frac"] is not None else 1.0
-            if t_frac <= hp_frac + cfg.commit_hp_margin:
-                fight_ok, why = True, f"cornered ({t_frac:.0%} vs {hp_frac:.0%})"
-                self._retreating = False
 
         # RETREAT: hurt with threats near, or a fight we would lose.
         if threats and not fight_ok and (hp_frac < cfg.retreat_hp or self._retreating):
@@ -448,12 +347,8 @@ class TacticalBrain:
             cand["retreat"] = (2.4 + (cfg.reengage_hp - hp_frac), pt,
                                f"hp {hp_frac:.0%}, {len(threats)} threat(s)")
         else:
-            av_r = cfg.avoid_radius_tiles or (cfg.enemy_range_tiles + 1.5)
-            if cfg.late_avoid_radius_tiles and players_left <= cfg.late_game_players:
-                av_r = cfg.late_avoid_radius_tiles
-            av_r *= ppt
-            dangers = [e for e in enemies if e["dist"] <= av_r and
-                       (e["visible"] or cfg.avoid_hidden)]
+            av_r = (cfg.avoid_radius_tiles or (cfg.enemy_range_tiles + 1.5)) * ppt
+            dangers = [e for e in enemies if e["dist"] <= av_r and e["visible"]]
             if not fight_ok and dangers:
                 pt = self._retreat_point(world, planner, px, py, dangers, zone, short, ppt)
                 cand["retreat"] = (cfg.avoid_utility, pt,
@@ -501,18 +396,12 @@ class TacticalBrain:
 
         # CAMP: hide in a bush, and stay hidden while it is working.
         in_bush = world is not None and world.ready() and self._bush_at(world, px, py) > 0.5
-        if cfg.camp_utility > 0 and (not cfg.camp_max_players
-                                     or players_left <= cfg.camp_max_players):
+        if cfg.camp_utility > 0:
             near_eyes = [e for e in enemies if e["visible"]
                          and e["dist"] <= cfg.bush_see_tiles * ppt]
             if in_bush and enemies and not near_eyes and not fight_ok and not in_gas \
                     and (gas_d is None or gas_d > cfg.gas_urgent_tiles):
-                u = cfg.hidden_utility
-                if cfg.hide_when_hunted:
-                    # Running out of the bush makes us visible to the enemy
-                    # we are running from; staying in it does not.
-                    u = max(u, cfg.avoid_utility + 0.1)
-                cand["camp"] = (u, None, "hidden in bush")
+                cand["camp"] = (cfg.hidden_utility, None, "hidden in bush")
             else:
                 bp = self._camp_point(world, px, py, zone, ppt, short)
                 if bp is not None:
@@ -568,9 +457,6 @@ class TacticalBrain:
             # Shooting reveals the position; a camper fires only when the
             # engage mode says the fight is worth it.
             hint = CombatHint(hold_fire=True, allow_boxes=False)
-
-        if best == "retreat" and cfg.retreat_juke_deg and point is not None:
-            point = self._juke(world, px, py, point, short)
 
         g = Goal(point=point, mode=best, reason=reason, avoid=avoid,
                  precise=(best == "cube"), hint=hint, target_id=tid,
@@ -639,17 +525,8 @@ class TacticalBrain:
         target = min(visible, key=value)
         self._last_target = target["id"]
         ratio = our_eff / max(1.0, strength(target))
-        partner = None
-        if cfg.busy_engage_ratio and target["hurt"]:
-            tx, ty = target["pos"]
-            near = [e for e in visible if e["id"] != target["id"]
-                    and hypot(e["pos"][0] - tx, e["pos"][1] - ty) <= cfg.busy_tiles * ppt]
-            if near:
-                partner = min(near, key=lambda e: hypot(e["pos"][0] - tx, e["pos"][1] - ty))
         crowd = sum(1 for e in enemies
-                    if e["dist"] <= cfg.threat_radius_tiles * ppt
-                    and e["id"] != target["id"]
-                    and (partner is None or e["id"] != partner["id"]))
+                    if e["dist"] <= cfg.threat_radius_tiles * ppt and e["id"] != target["id"])
         nearly_dead = (target["hp_frac"] is not None and target["hp_frac"] < 0.3) or (
             target["hp"] is not None and target["hp"] < 0.25 * our_hp)
         ammo_empty = bool(getattr(state, "ammo_known", False)) and getattr(state, "ammo_count", 1) < 1
@@ -659,21 +536,12 @@ class TacticalBrain:
         if crowd >= cfg.max_enemies_engaged and not nearly_dead:
             return target, False, f"outnumbered ({crowd + 1})"
         need = self._engage_ratio()
-        if (cfg.early_players and (getattr(state, "players_left", None) or 10)
-                > cfg.early_players):
-            need = max(need, cfg.early_engage_ratio)
-        if cfg.late_engage_ratio and (getattr(state, "players_left", None) or 10) \
-                <= cfg.late_game_players:
-            need = cfg.late_engage_ratio
-        if partner is not None:
-            need = min(need, cfg.busy_engage_ratio)
         if ratio < need and not nearly_dead:
             return target, False, f"outmatched ({ratio:.2f})"
         if ammo_empty and not nearly_dead:
             return target, False, "reloading"
         return target, True, (f"target {target['dist'] / ppt:.1f}t "
-                              f"({'low' if nearly_dead else f'x{ratio:.1f}'}"
-                              f"{', busy' if partner is not None else ''})")
+                              f"({'low' if nearly_dead else f'x{ratio:.1f}'})")
 
     # ------------------------------------------------------------------ #
     # destinations
@@ -714,7 +582,6 @@ class TacticalBrain:
 
     def _retreat_point(self, world, planner, px, py, threats, zone, short, ppt) -> Point:
         """Somewhere far from every threat, behind a wall, out of the gas."""
-        cfg = self.config
         best, best_s = None, -1e9
         tpos = [t["pos"] for t in threats]
         for i in range(16):
@@ -728,13 +595,9 @@ class TacticalBrain:
                 if world is not None and world.ready():
                     if any(self._walled(world, (cx, cy), t) for t in tpos[:2]):
                         s += 2.5
-                    s += cfg.retreat_bush_bonus * self._bush_at(world, cx, cy)
+                    s += 1.5 * self._bush_at(world, cx, cy)
                     s -= 8.0 * self._gas_at(world, cx, cy, dilated=planner)
                     s -= 2.0 * self._edge_risk(world, cx, cy)
-                    if cfg.retreat_gas_weight:
-                        gt = self._gas_tiles_at(world, cx, cy, ppt)
-                        if gt is not None and gt < cfg.gas_margin_tiles:
-                            s -= cfg.retreat_gas_weight * (cfg.gas_margin_tiles - gt)
                 if zone is not None:
                     zx, zy = zone
                     d0 = hypot(zx - px, zy - py)
@@ -900,110 +763,6 @@ class TacticalBrain:
                 if s > best_s:
                     best, best_s = (x, y), s
         return best if best is not None else self._toward_zone(world, px, py, zone, short, ppt)
-
-    def _route_gas(self, world, px, py, ppt):
-        """(utility, goal, reason) when the walk to safe ground is getting
-        longer than the time the gas leaves, else None. See `route_gas`."""
-        cfg = self.config
-        if world is None or not world.ready() or not getattr(world, "have_reference", False):
-            self._route = None
-            return None
-        cc = world.arena_center_cell()
-        if cc is None:
-            return None
-        cw, ch = world.cell
-        tx, ty = ppt / max(cw, 1e-6), ppt / max(ch, 1e-6)      # cells per tile
-        gh, gw = world.gas.shape
-        ys, xs = np.mgrid[0:gh, 0:gw]
-        cheb = np.maximum(np.abs(xs + 0.5 - cc[0]) / tx, np.abs(ys + 0.5 - cc[1]) / ty)
-        now = self.tick * cfg.tick_seconds
-
-        # The front's half-width: the nearest gas to the centre.
-        gassy = world.gas > 0.5
-        inb = getattr(world, "reference_in_bounds", None)
-        if inb is not None:
-            gassy &= inb
-        hist = self._gas_hist
-        if gassy.any():
-            h = float(cheb[gassy].min())
-            hist.append((now, h))
-            del hist[:-200]
-        elif hist:
-            h = hist[-1][1] - self._gas_rate() * (now - hist[-1][0])
-        else:
-            return None
-        rate = self._gas_rate()
-
-        c = world.clamp_cell(world.to_cell((px, py)))
-        depth = h - float(cheb[c[1], c[0]])
-        want = cfg.route_gas_depth_tiles
-        if depth >= want + 20.0 or h <= want:
-            return None
-
-        # Route search, refreshed every few ticks (kept in map cells).
-        r = self._route
-        if r is None or self.tick - r[2] >= cfg.route_gas_every \
-                or r[3] != (world.shift[0], world.shift[1]):
-            goal, length = self._walk_to_depth(world, c, cheb, h - want, tx, ty)
-            r = self._route = (goal, length, self.tick, (world.shift[0], world.shift[1]))
-        goal, length = r[0], r[1]
-        if goal is None or length is None or length < 1.0:
-            return None
-        speed = float(getattr(self.ability, "speed_tiles", None) or cfg.walk_speed_tiles)
-        t_walk = length / max(speed, 0.1)
-        t_gas = max(0.0, depth) / max(rate, 1e-3)
-        slack = t_gas - t_walk - cfg.route_gas_buffer_s
-        if slack > 0:
-            return None
-        u = 3.6 + min(2.0, -slack / 4.0)
-        return (u, world.to_pixels(goal),
-                f"route {length:.0f}t, gas in {t_gas:.0f}s")
-
-    def _gas_rate(self) -> float:
-        """Closing speed of the gas front (tiles/s per side), measured once
-        there is a history of it, else the prior."""
-        hist = self._gas_hist
-        cfg = self.config
-        if len(hist) >= 2 and hist[-1][0] - hist[0][0] >= 8.0:
-            (t0, h0), (t1, h1) = hist[0], hist[-1]
-            r = (h0 - h1) / max(t1 - t0, 1e-6)
-            if 0.03 <= r <= 2.0:
-                return r
-        return cfg.gas_rate_prior
-
-    def _walk_to_depth(self, world, start, cheb, limit, tx, ty):
-        """Shortest walk (tiles) from `start` to a cell with cheb <= limit."""
-        import heapq
-        occ = world.occupancy
-        clear = world.clearance()
-        gh, gw = occ.shape
-        passable = ((~occ) & (clear >= 0.5)).ravel().tolist()
-        target = ((cheb <= limit) & (clear >= 0.9)).ravel().tolist()
-        sx, sy = int(start[0]), int(start[1])
-        hx, hy, hd = 1.0 / tx, 1.0 / ty, (1.0 / tx ** 2 + 1.0 / ty ** 2) ** 0.5
-        steps = ((1, 0, hx), (-1, 0, hx), (0, 1, hy), (0, -1, hy),
-                 (1, 1, hd), (1, -1, hd), (-1, 1, hd), (-1, -1, hd))
-        dist = {(sx, sy): 0.0}
-        heap = [(0.0, sx, sy)]
-        budget = 12000
-        while heap and budget > 0:
-            d, x, y = heapq.heappop(heap)
-            if d > dist.get((x, y), 1e18):
-                continue
-            budget -= 1
-            if target[y * gw + x]:
-                return (x, y), d
-            for dx, dy, w in steps:
-                nx, ny = x + dx, y + dy
-                if not (0 <= nx < gw and 0 <= ny < gh) or not passable[ny * gw + nx]:
-                    continue
-                if dx and dy and not (passable[y * gw + nx] and passable[ny * gw + x]):
-                    continue
-                nd = d + w
-                if nd < dist.get((nx, ny), 1e18):
-                    dist[(nx, ny)] = nd
-                    heapq.heappush(heap, (nd, nx, ny))
-        return None, None
 
     def _toward_zone(self, world, px, py, zone, short, ppt) -> Point:
         """A step toward the safe-zone centre, or away from the nearest gas."""

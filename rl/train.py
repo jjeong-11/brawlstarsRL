@@ -92,7 +92,7 @@ def make_env(live: bool = False, serial=None, controls_path=None, tick_seconds: 
                                  **extra)
     elif use_scrcpy:
         # Smooth path: scrcpy for held-touch movement + fast capture.
-        from .scrcpy_backend import make_scrcpy_env
+        from .scrcpy_control import make_scrcpy_env
         from .actions import Controls
         controls = Controls.from_json(controls_path) if controls_path else None
         env = make_scrcpy_env(serial=serial, controls=controls,
@@ -211,11 +211,12 @@ def main() -> None:
                          "DOWN by the same factor or commitments last N times "
                          "longer in wall-clock terms than intended.")
     ap.add_argument("--scrcpy", action="store_true",
-                    help="use scrcpy for smooth movement + fast capture "
-                         "(pip install scrcpy-client).")
+                    help="use scrcpy for held-touch movement + fast capture "
+                         "(the scrcpy app + `pip install av`; "
+                         "see docs/ANDROID_CONTROL.md).")
     ap.add_argument("--sendevent", action="store_true",
-                    help="smooth movement via raw multitouch over adb — no extra "
-                    "deps. Recommended if scrcpy won't install.")
+                    help="held movement via raw multitouch over adb. Recent "
+                    "Android versions block it; prefer --scrcpy.")
     ap.add_argument("--sendevent-orientation", choices=("A", "B"), default="A",
                     help="raw-touch orientation selected by calibrate_sendevent.py "
                     "(default: A)")

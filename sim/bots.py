@@ -20,7 +20,6 @@ import random
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-import numpy as np
 
 from .arena import Arena, Brawler
 

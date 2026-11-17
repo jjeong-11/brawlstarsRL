@@ -386,6 +386,18 @@ class ScrcpyExecutor(ActionExecutor):
         self.ctl.close()
 
 
+def make_scrcpy_env(serial: Optional[str] = None, controls: Optional[Controls] = None,
+                    reward_config=None, tick_seconds: float = 0.1, **kwargs):
+    """Training env on scrcpy for BOTH capture (H.264 stream, rl/scrcpy_video.py)
+    and control (held multi-touch, this module)."""
+    from .env import BrawlStarsEnv
+    from .scrcpy_video import ScrcpyVideoSource
+    executor = ScrcpyExecutor(serial=serial, controls=controls)
+    return BrawlStarsEnv(source_factory=lambda: ScrcpyVideoSource(serial),
+                         executor=executor, reward_config=reward_config,
+                         tick_seconds=tick_seconds, **kwargs)
+
+
 def _detect_size(serial: Optional[str]) -> Tuple[int, int]:
     """Landscape (w, h) from `wm size` (override size wins if set)."""
     try:

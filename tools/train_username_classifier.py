@@ -17,7 +17,6 @@ come from getEnemies.find_enemy_health_bars() candidates on new screenshots
 their labels to labels.json, and re-run this script.
 """
 
-import json
 from pathlib import Path
 
 import numpy as np

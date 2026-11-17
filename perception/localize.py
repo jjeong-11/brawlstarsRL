@@ -96,7 +96,7 @@ bot that is merely as good as it was yesterday is the correct failure mode.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np

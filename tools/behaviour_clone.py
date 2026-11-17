@@ -224,7 +224,6 @@ def train(data: str, out: str, epochs: int = 12, batch: int = 256,
     "pretrained" code path to keep in sync.
     """
     import torch
-    from torch import nn
 
     d = np.load(data)
     obs, act = d["obs"], d["act"]

@@ -12,17 +12,11 @@ Two channels to set up: **input** (sending taps/swipes) and **capture** (getting
 frames back for perception). Both run over the same USB `adb` connection to the
 Pixel — no emulator required.
 
-> **Use normal ADB for v4 control.** Pixel 10 or Newest Android versions
-> blocks raw `sendevent` input, and the PyPI `scrcpy-client` package bundles 
-> a server too old for the phone. It is therefore optional and deliberately 
-> not installed by `requirements.txt`. The waypoint controller reduces policy-level 
-> direction jitter, but ADB itself still cannot hold the game joystick continuously
-> between commands.
-
-> You may install the current official `scrcpy` desktop app for manually mirroring
-> the phone or faster window capture. Do not use v4's `--scrcpy` Python backend:
-> its protocol server must exactly match its client and the published Python
-> package is incompatible with this device.
+> **Three touch backends.** `scrcpy` (section 0, recommended) holds the
+> joystick through the official scrcpy server. `adb` works everywhere with
+> nothing extra, but lifts the finger after every swipe, so movement is bursty.
+> `sendevent` (raw multitouch) holds too, but recent Android versions,
+> including the Pixel 10, block it.
 
 ---
 

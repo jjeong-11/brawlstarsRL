@@ -46,7 +46,6 @@ pairs in the format tools/behaviour_clone.py trains on.
 from __future__ import annotations
 
 import argparse
-import math
 import pathlib
 import random
 import sys

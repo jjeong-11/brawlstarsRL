@@ -45,7 +45,7 @@ import pathlib
 import pickle
 import random
 import sys
-from typing import List, Optional
+from typing import List
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
