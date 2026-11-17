@@ -122,33 +122,10 @@ _REFERENCE_TICK = 0.1
 
 
 def _planner_config_for(tick_seconds: float):
-    """Planner config with its tick counts rescaled for this loop rate.
-
-    `commit_ticks` and `stuck_ticks` are counted in DECISIONS but chosen for
-    wall-clock durations: (8, 16, 26) decisions is 0.8-2.6s of travel at the
-    reference 0.1s tick, and 5 motionless decisions is half a second.
-
-    Change --tick-seconds and those meanings silently change with it. Halving
-    the tick to double the data rate would also halve every commitment, undoing
-    the temporal abstraction the whole planner exists to provide -- a real trap,
-    because the loop would look twice as productive while the agent quietly went
-    back to twitching. Scaling here keeps commitments fixed in SECONDS, so the
-    tick rate is safe to tune.
-    """
-    from dataclasses import replace
-    from .path_planner import PathPlannerConfig
-
-    base = PathPlannerConfig()
-    if not tick_seconds or tick_seconds <= 0:
-        return base                       # offline / unpaced: leave as authored
-    scale = _REFERENCE_TICK / float(tick_seconds)
-    if abs(scale - 1.0) < 0.05:
-        return base
-    return replace(
-        base,
-        commit_ticks=tuple(max(1, int(round(t * scale))) for t in base.commit_ticks),
-        stuck_ticks=max(2, int(round(base.stuck_ticks * scale))),
-    )
+    """Planner config with its tick counts rescaled for this loop rate, so
+    commitments and stuck detection stay fixed in SECONDS (rl/timebase.py)."""
+    from .timebase import planner_config_for
+    return planner_config_for(tick_seconds)
 
 
 def _nearest_slots(positions, px, py, w, h, n_slots):

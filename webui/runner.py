@@ -89,7 +89,7 @@ class SessionConfig:
     brawler: str = "shelly"
     mode: str = "observe"                 # "observe" | "control"
     serial: Optional[str] = None          # adb device; None = the only one
-    fps: float = 4.0                      # target ticks/second
+    fps: float = 10.0                     # target ticks/second
     source: str = "phone"                 # "phone" | "video" (offline testing)
     # How phone frames are captured: "screencap" (adb, 150-400 ms a frame) or
     # "scrcpy" (H.264 stream, tens of ms; needs scrcpy + PyAV).
@@ -238,6 +238,7 @@ class SessionRunner:
             "episode_return": 0.0,
             "breakdown": {},
             "game": {},                # hp / cubes / super / left / gas / enemies
+            "latency": {},             # per-stage p50/p95, stale frames, frame age
             "decision": {},            # intent label, waypoint, planner status
             "config": {},
         }
@@ -262,23 +263,13 @@ class SessionRunner:
         source = executor = tracer = None
         try:
             import cv2
-            from perception.getGas import gas_info, player_anchor
-            from perception.getTerrain import (GRID_H, GRID_W, ProfileSelector,
-                                               find_terrain, play_rect)
-            from perception.liveLoop import LivePerception
-            from rl.actions import decode_action, decode_goal
-            from rl.camera_tracker import CameraTracker
-            from rl.combat import CombatConfig, CombatPolicy
             from rl.checkpoints import PolicyStepper
-            from rl.enemy_tracker import EnemyTracker
-            from rl.tactics import TacticalBrain, TacticsConfig
             from rl.debug_trace import DecisionTracer, TraceConfig
-            from rl.env import encode_observation
-            from rl.kills import KillAttributor
             from rl.menus import navigate_to_match
-            from rl.path_planner import PathPlannerConfig, WaypointPlanner
-            from rl.rewards import RewardCalculator, RewardConfig
-            from rl.state import adapt_live_state
+            from rl.pipeline import LiveAgent
+            from rl.rewards import RewardConfig
+            from rl.timebase import (combat_config_for, planner_config_for,
+                                     tactics_config_for)
 
             brawler = self.registry.get(cfg.brawler)
             if brawler.multi_body:
@@ -292,11 +283,13 @@ class SessionRunner:
 
             # --- per-brawler priors (all empty today; see brawlers/profiles.py)
             prof = profile_for(cfg.brawler)
+            # Tick-counted settings are rescaled to this loop rate first
+            # (rl/timebase.py), then the brawler's overrides go on top.
+            tick_s = 1.0 / cfg.fps
             reward_cfg = apply_overrides(RewardConfig(), prof.reward_overrides)
-            combat_cfg = apply_overrides(CombatConfig(tick_seconds=1.0 / cfg.fps),
-                                         prof.combat_overrides)
-            planner_cfg = apply_overrides(PathPlannerConfig(), prof.planner_overrides)
-            tactics_cfg = apply_overrides(TacticsConfig(tick_seconds=1.0 / cfg.fps),
+            combat_cfg = apply_overrides(combat_config_for(tick_s), prof.combat_overrides)
+            planner_cfg = apply_overrides(planner_config_for(tick_s), prof.planner_overrides)
+            tactics_cfg = apply_overrides(tactics_config_for(tick_s),
                                           getattr(prof, "tactics_overrides", {}) or {})
             if not prof.is_default:
                 self._say(f"applied {cfg.brawler} profile overrides")
@@ -333,49 +326,18 @@ class SessionRunner:
             source = self._build_source(cfg)
             executor = self._build_executor(cfg)
 
-            def new_match():
-                """Everything that must NOT survive into the next match.
-
-                This list is the counterpart of `rl/env.py:reset()` and has to
-                stay in step with it. Each entry is carried state that is not
-                merely stale but actively wrong once the arena changes:
-
-                  planner.reset()   also resets `planner.world` — the fused
-                                    occupancy and gas. Skipping it leaves the
-                                    last match's walls layered over the new
-                                    map, which is the "same environment after a
-                                    reset" symptom.
-                  camera            frame-to-frame correlation across a scene
-                                    cut is meaningless, and the world map is
-                                    registered off it, so a bad delta drags the
-                                    whole coordinate frame.
-                  profiles          the next match may be a different skin; a
-                                    sticky profile would be applied to it.
-                  LivePerception    holds temporal smoothing, so a fresh object
-                                    rather than a reset method (same as env).
-                """
-                p = WaypointPlanner(planner_cfg)
-                c = CameraTracker()
-                pr = ProfileSelector()
-                cb = CombatPolicy(combat_cfg, ability=ability)
-                cb.reset()
-                rc = RewardCalculator(reward_cfg)
-                rc.reset()
-                ka = KillAttributor()
-                ka.reset()
-                br = (TacticalBrain(tactics_cfg, ability=ability, combat=cb)
-                      if use_brain else None)
-                # Carries the LSTM state between ticks for a recurrent policy
-                # (a fresh state every tick is a policy with no memory).
-                stepper = (PolicyStepper(policy, deterministic=cfg.deterministic)
-                           if policy is not None else None)
-                return types.SimpleNamespace(
-                    perception=LivePerception(), calc=rc, killer=ka,
-                    planner=p, camera=c, profiles=pr, combat=cb,
-                    tracker=EnemyTracker(), brain=br, stepper=stepper,
-                    prev_raw=None)
-
-            m = new_match()
+            # The whole frame -> decision stack (rl/pipeline.py). `new_match()`
+            # drops everything that must not survive into the next match: the
+            # fused world map, camera registration, terrain profile, tracks.
+            agent = LiveAgent(
+                cfg.brawler, tick_seconds=tick_s, use_brain=use_brain,
+                policy_stepper_factory=(
+                    (lambda: PolicyStepper(policy, deterministic=cfg.deterministic))
+                    if policy is not None else None),
+                policy_source=slot.source, combat_config=combat_cfg,
+                planner_config=planner_cfg, tactics_config=tactics_cfg,
+                reward_config=reward_cfg, gas_every_s=cfg.gas_every_s)
+            m = agent
 
             # every_seconds=0 -> we drive capture/render ourselves each tick.
             trace_cfg = TraceConfig(every_seconds=0.0,
@@ -393,7 +355,9 @@ class SessionRunner:
             frame_times: Deque[float] = collections.deque(maxlen=20)
             period = 1.0 / cfg.fps
             recorder = _Recorder(cfg, self._say) if cfg.record_frames else None
-            last_gas = last_view = -1e9
+            last_view = last_lat = -1e9
+            last_frame = None
+            stale: Deque[int] = collections.deque(maxlen=100)
 
             while not self._stop.is_set():
                 t0 = time.time()
@@ -414,15 +378,15 @@ class SessionRunner:
                     continue
                 misses = 0
 
-                live, _ = m.perception.tick(frame)
-                kills = m.killer.update(live)
-                state = adapt_live_state(live, tick=tick, kills_this_tick=kills,
-                                         frame_size=(frame.shape[1], frame.shape[0]))
-                result = m.calc.compute(state)
-                tick += 1
+                # A frame the source already gave us is old news: the loop is
+                # outrunning capture, and this decision adds no information.
+                stale.append(1 if frame is last_frame else 0)
+                last_frame = frame
 
-                screen = (live.get("game_state") or {}).get("state", "unknown")
-                in_match = screen == "in_match"
+                tk = agent.step(frame)
+                live, state, result, screen = tk.live, tk.state, tk.reward, tk.screen
+                tick += 1
+                in_match = tk.in_match
 
                 # --- episode boundary ------------------------------------- #
                 # Two independent triggers, because there are two ways a match
@@ -445,7 +409,7 @@ class SessionRunner:
                         # we are back in a match or it times out; it pauses the
                         # capture thread itself so the taps get the adb channel.
                         navigate_to_match(source, executor, verbose=True)
-                    m = new_match()
+                    agent.new_match()
                     episode += 1
                     tick = 0
                     was_in_match = False
@@ -456,7 +420,7 @@ class SessionRunner:
                     if tick > 1:      # not the very first frame of the session
                         self._say(f"new match detected — clearing the world map, "
                                   f"camera and terrain profile")
-                        m = new_match()
+                        agent.new_match()
                         episode += 1
                         tick = 0
                         self._publish(episode=episode)
@@ -473,76 +437,10 @@ class SessionRunner:
                     # whole session.
                     was_in_match = False
 
-                fh, fw = frame.shape[:2]
-
-                # --- terrain + gas (mirrors rl/env.py's per-step perception) --
-                terrain = None
-                if state.player_pos is not None:
-                    try:
-                        terrain = find_terrain(frame, player_pos=state.player_pos,
-                                               selector=m.profiles)
-                    except Exception:
-                        terrain = None
-                rect = terrain["rect"] if terrain else play_rect(frame)
-                gas = None
-                if t0 - last_gas >= cfg.gas_every_s:
-                    last_gas = t0
-                    try:
-                        gas = gas_info(frame, player_pos=player_anchor(state), grid_rect=rect,
-                                       grid_size=(GRID_W, GRID_H))["grid"]
-                    except Exception:
-                        gas = None
-                if terrain is None and rect is not None:
-                    m.planner.world.set_geometry(rect, (GRID_W, GRID_H))
-
-                dx, dy, ok = m.camera.update(frame, rect)
-                camera_delta = (dx, dy) if ok else (0.0, 0.0)
-                m.tracker.update(state, camera_delta)
-
-                # --- the brain, or the policy ------------------------------ #
-                goal = None
-                if m.brain is not None:
-                    goal = m.brain.decide(state, m.planner, m.tracker)
-                    action = [0, 0]
-                    policy_source = "tactical"
-                elif policy is not None:
-                    max_hp = m.calc._max_health or m.calc.config.default_max_health
-                    # Encoded the way training sees it: velocity from the
-                    # camera and the previous action were both missing here,
-                    # so the policy ran on inputs it never trained on.
-                    obs = encode_observation(state, max_hp, (fw, fh),
-                                             velocity=(-camera_delta[0], -camera_delta[1]),
-                                             prev_action=m.prev_raw,
-                                             planner_status=m.planner.status())
-                    action = m.stepper(obs)
-                    policy_source = slot.source
-                else:
-                    # Random still exercises relocation, A*, clearance and gas
-                    # escape against real frames — it just says nothing about
-                    # the policy, so the UI must show which case this is.
-                    action = [int(np.random.randint(16)), int(np.random.randint(3))]
-                    policy_source = "none"
-
-                combat = m.combat.decide(state, frame_size=(fw, fh),
-                                         world=m.planner.world, tracker=m.tracker,
-                                         hint=getattr(goal, "hint", None))
-                if (combat.attack or combat.super) and combat.target_kind != "box":
-                    m.killer.note_fired()
-
-                kwargs = dict(state=state, frame_size=(fw, fh), planner=m.planner,
-                              terrain=terrain, camera_delta=camera_delta,
-                              gas_grid=gas, combat=combat)
-                if goal is not None:
-                    if executor is None:
-                        intent = decode_goal(goal, **kwargs)     # nothing is sent
-                    else:
-                        intent = executor.apply_goal(goal, **kwargs)
-                    action = [int(intent.raw[0]), int(intent.raw[1])]
-                elif executor is None:
-                    intent = decode_action(action, **kwargs)     # nothing is sent
-                else:
-                    intent = executor.apply(action, **kwargs)
-                m.prev_raw = tuple(intent.raw)
+                terrain, goal, combat, intent = tk.terrain, tk.goal, tk.combat, tk.intent
+                action, policy_source = tk.action, tk.policy_source
+                if executor is not None:
+                    executor.send(intent)       # observe mode has no executor
                 if recorder is not None:
                     recorder.brain = m.brain
                     recorder.maybe_record(frame, t0, tick, episode, state, goal,
@@ -583,6 +481,18 @@ class SessionRunner:
                     decision=_decision_summary(intent, m.planner, action,
                                                policy_source, combat, brain=m.brain),
                 )
+                if t0 - last_lat >= 1.0:
+                    # Is the loop real-time? Per-stage latency, how often it
+                    # re-used an old frame, and the source's frame age.
+                    last_lat = t0
+                    age = getattr(source, "frame_age", None)
+                    self._publish(latency={
+                        "stages": {k: {"p50": round(v["p50"], 1), "p95": round(v["p95"], 1)}
+                                   for k, v in agent.latency().items()},
+                        "stale_frames": round(sum(stale) / max(1, len(stale)), 2),
+                        "frame_age_ms": (round(1000 * age) if isinstance(age, (int, float))
+                                         else None),
+                        "budget_ms": round(1000 * period)})
 
                 sleep_for = period - (time.time() - t0)
                 if sleep_for > 0:
@@ -659,6 +569,10 @@ class SessionRunner:
                                      flip_short=flip_short, flip_long=flip_long)
         from rl.actions import AdbExecutor
         self._say("CONTROL MODE: adb executor — the bot is playing")
+        if controls is not None:
+            # `input swipe` blocks for hold_ms: longer than a tick and swipes
+            # queue, capping the loop and piling up latency.
+            controls = controls.tuned_for_tick(1.0 / cfg.fps)
         return AdbExecutor(serial=cfg.serial, controls=controls)
 
 

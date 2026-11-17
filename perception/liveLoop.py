@@ -257,6 +257,12 @@ class AdbScreencapSource:
             else:
                 time.sleep(0.05)      # brief backoff after a failed capture
 
+    @property
+    def frame_age(self):
+        """Seconds since the newest captured frame arrived, or None."""
+        with self._lock:
+            return (time.time() - self._frame_time) if self._frame is not None else None
+
     def grab(self):
         # Synchronous when not async, or while paused (so menu navigation still
         # gets frames but without the background thread hogging USB).

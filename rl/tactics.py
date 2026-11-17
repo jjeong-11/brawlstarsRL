@@ -238,6 +238,9 @@ class TacticsConfig:
     # while: routing at an unreachable box forever is a classic stall.
     give_up_ticks: int = 40
     blacklist_ticks: int = 300
+    # A tracked enemy counts as visible if detected within this many ticks
+    # (0.6 s at the 0.1 s reference tick; rl/timebase.py rescales it).
+    visible_age_ticks: int = 6
 
     # --- exploration ----------------------------------------------------------- #
     explore_hold_ticks: int = 30
@@ -601,7 +604,7 @@ class TacticalBrain:
                 out.append({"pos": (sx, sy), "dist": hypot(sx - px, sy - py),
                             "hp": t.hp, "hp_frac": t.hp_frac(), "cubes": t.cubes,
                             "hurt": tracker.in_fight(t), "id": t.id,
-                            "visible": t.age(tracker.tick) <= 6})
+                            "visible": t.age(tracker.tick) <= self.config.visible_age_ticks})
             return out
         for i, e in enumerate(state.enemy_list() if hasattr(state, "enemy_list") else []):
             ex, ey = float(e.pos[0]), float(e.pos[1])

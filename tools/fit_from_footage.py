@@ -62,11 +62,7 @@ TILES_ACROSS = 17.0
 def perceive_video(path: str, step: int = 2, max_frames: int = 0, log=print) -> dict:
     """{'video', 'fps', 'step', 'matches': [[frame record, ...], ...]}."""
     import cv2
-    from perception.getGas import gas_info, player_anchor
-    from perception.getTerrain import GRID_H, GRID_W, ProfileSelector, find_terrain, play_rect
-    from perception.liveLoop import LivePerception
-    from rl.camera_tracker import CameraTracker
-    from rl.state import adapt_live_state
+    from rl.pipeline import LiveAgent
     from tools.label_footage import FootageLabeler, LabelConfig
 
     cap = cv2.VideoCapture(path)
@@ -74,9 +70,11 @@ def perceive_video(path: str, step: int = 2, max_frames: int = 0, log=print) -> 
         raise RuntimeError(f"cannot open {path}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     dt = step / fps
-    # Synchronous OCR and the VIDEO clock: offline frames arrive far faster
-    # than real time, and perception schedules its stages by time.
-    lp, sel, cam = LivePerception(async_game_state=False), ProfileSelector(), CameraTracker()
+    # The live stack (rl/pipeline.py), on the VIDEO clock and with synchronous
+    # OCR: offline frames arrive far faster than real time, and perception
+    # schedules its stages by time. Gas is scanned every frame for calibration.
+    agent = LiveAgent(None, tick_seconds=dt, rewards=False, gas_every_s=0.0,
+                      async_game_state=False)
     cur = {"state": None}
     lab = FootageLabeler(LabelConfig(fps=fps / step, smooth_frames=1),
                          perceive=lambda f: {"player_pos": cur["state"].player_pos,
@@ -93,37 +91,21 @@ def perceive_video(path: str, step: int = 2, max_frames: int = 0, log=print) -> 
         if idx % step:
             idx += 1
             continue
-        live, _ = lp.tick(frame, now=idx / fps)
-        state = adapt_live_state(live, tick=idx, kills_this_tick=0,
-                                 frame_size=(frame.shape[1], frame.shape[0]))
-        screen = (live.get("game_state") or {}).get("state", "unknown")
-        in_match = screen == "in_match"
+        tk = agent.step(frame, now=idx / fps)
+        state, screen, in_match = tk.state, tk.screen, tk.in_match
         if in_match and not in_match_prev:
             matches.append([])
-            cam.reset()
             lab.reset()
         in_match_prev = in_match if screen != "unknown" else in_match_prev
         if not in_match or not matches:
             idx += 1
             continue
         cur["state"] = state
-        terrain = None
-        if state.player_pos is not None:
-            try:
-                terrain = find_terrain(frame, player_pos=state.player_pos, selector=sel)
-            except Exception:
-                terrain = None
-        rect = terrain["rect"] if terrain else play_rect(frame)
-        try:
-            gas = gas_info(frame, player_pos=player_anchor(state), grid_rect=rect,
-                           grid_size=(GRID_W, GRID_H))["grid"]
-        except Exception:
-            gas = None
-        dx, dy, okc = cam.update(frame, rect)
+        rect = tk.terrain["rect"] if tk.terrain else agent.planner.world.rect
         label = lab.step(frame, rect=rect, dt=dt)
         matches[-1].append({
-            "t": idx / fps, "state": state, "terrain": terrain, "gas": gas,
-            "rect": tuple(rect), "cam": (dx, dy) if okc else (0.0, 0.0),
+            "t": idx / fps, "state": state, "terrain": tk.terrain, "gas": tk.gas,
+            "rect": tuple(label["rect"]), "cam": tk.camera_delta,
             "motion": label["motion"], "moving": label["moving"],
             "speed_tps": label["speed_tps"], "attack": label["attack"], "super": label["super"],
             "players_left": state.players_left, "frame_size": (frame.shape[1], frame.shape[0]),

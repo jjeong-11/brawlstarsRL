@@ -85,10 +85,9 @@ class LiveAgent:
                  gas_every_s: float = 0.4, terrain_every_s: float = 0.0,
                  async_game_state: bool = True, latency_window: int = 600):
         from brawlers import default_abilities
-        from rl.combat import CombatConfig
-        from rl.path_planner import PathPlannerConfig
         from rl.rewards import RewardConfig
-        from rl.tactics import TacticsConfig
+        from rl.timebase import (combat_config_for, planner_config_for,
+                                 tactics_config_for, tracker_config_for)
 
         self.brawler = brawler
         self.tick_seconds = float(tick_seconds)
@@ -96,9 +95,12 @@ class LiveAgent:
         self.use_brain = bool(use_brain)
         self._stepper_factory = policy_stepper_factory
         self._policy_source = policy_source
-        self.combat_config = combat_config or CombatConfig(tick_seconds=self.tick_seconds)
-        self.planner_config = planner_config or PathPlannerConfig()
-        self.tactics_config = tactics_config or TacticsConfig(tick_seconds=self.tick_seconds)
+        # Tick-counted settings are rescaled so they last the same number of
+        # SECONDS at this loop rate as at the simulator's 0.1 s tick.
+        self.combat_config = combat_config or combat_config_for(self.tick_seconds)
+        self.planner_config = planner_config or planner_config_for(self.tick_seconds)
+        self.tactics_config = tactics_config or tactics_config_for(self.tick_seconds)
+        self.tracker_config = tracker_config_for(self.tick_seconds)
         self.reward_config = reward_config or RewardConfig()
         self.rewards = bool(rewards)
         self.gas_every_s = float(gas_every_s)
@@ -140,7 +142,7 @@ class LiveAgent:
         self.calc.reset()
         self.killer = KillAttributor()
         self.killer.reset()
-        self.tracker = EnemyTracker()
+        self.tracker = EnemyTracker(self.tracker_config)
         self.brain = (TacticalBrain(self.tactics_config, ability=self.ability, combat=self.combat)
                       if self.use_brain else None)
         self.stepper = self._stepper_factory() if self._stepper_factory is not None else None
@@ -148,6 +150,7 @@ class LiveAgent:
         self.tick = 0
         self._last_gas = self._last_terrain = -1e9
         self._terrain = None
+        self._last_anchor = None
 
     # ------------------------------------------------------------------ #
     def step(self, frame: np.ndarray, now: Optional[float] = None) -> Tick:
@@ -197,10 +200,19 @@ class LiveAgent:
         # --- gas ---------------------------------------------------------- #
         t = pc()
         gas = None
-        if clock - self._last_gas >= self.gas_every_s:
+        # The player's own ring, HP bar and name tag pass the gas colour test,
+        # and gas_info can only blank them if it knows where the player is.
+        # A scan without an anchor writes phantom gas next to the player into
+        # the world map, where it lingers for seconds (caught by
+        # tests/test_pipeline.py: "gas 0.8t away" on a frame with no gas). So
+        # use the last known anchor when this tick has none -- the sprite
+        # barely moves on screen -- and do not scan at all before the first.
+        anchor = player_anchor(state) or self._last_anchor
+        self._last_anchor = anchor
+        if anchor is not None and clock - self._last_gas >= self.gas_every_s:
             self._last_gas = clock
             try:
-                gas = gas_info(frame, player_pos=player_anchor(state), grid_rect=rect,
+                gas = gas_info(frame, player_pos=anchor, grid_rect=rect,
                                grid_size=(GRID_W, GRID_H))["grid"]
             except Exception:
                 gas = None

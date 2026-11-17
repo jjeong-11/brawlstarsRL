@@ -375,7 +375,17 @@ function render(s) {
   if (el.frameInfo.textContent !== info) el.frameInfo.textContent = info;
 
   const g = s.game || {};
+  // Real-time health: decision latency against the tick budget, how often the
+  // loop re-used an old frame (capture slower than the loop), frame age.
+  const L = s.latency || {};
+  const tot = (L.stages || {}).total;
+  const over = tot && L.budget_ms && tot.p95 > L.budget_ms;
   kv(el.stats, [
+    ['latency', tot ? `${tot.p50} / ${tot.p95} ms (budget ${L.budget_ms})` : '—', over ? 'alert' : 'on'],
+    ['old frames', L.stale_frames != null ? `${Math.round(100 * L.stale_frames)}%` : '—',
+      L.stale_frames > 0.3 ? 'alert' : 'off'],
+    ['frame age', L.frame_age_ms != null ? `${L.frame_age_ms} ms` : '—',
+      L.frame_age_ms > 150 ? 'alert' : 'off'],
     ['reward', (s.reward >= 0 ? '+' : '') + Number(s.reward).toFixed(3), s.reward >= 0 ? 'on' : 'alert'],
     ['return', (s.episode_return >= 0 ? '+' : '') + Number(s.episode_return).toFixed(2)],
     ['match', g.state ?? '—'],

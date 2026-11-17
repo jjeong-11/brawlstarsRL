@@ -223,6 +223,10 @@ class ActionExecutor:
         self._execute(intent)
         return intent
 
+    def send(self, intent: Intent) -> None:
+        """Drive the device with an already-decided intent (rl/pipeline.py)."""
+        self._execute(intent)
+
     def _execute(self, intent: Intent) -> None:  # pragma: no cover
         raise NotImplementedError
 

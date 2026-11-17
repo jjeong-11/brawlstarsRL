@@ -246,18 +246,30 @@ def test_runner_resets_the_world_between_matches():
 def test_runner_loop_drives_the_menus_and_rebuilds_state():
     """The web UI runner must do what `rl/env.py:reset()` does.
 
-    It reimplements the per-step work, and the first version omitted the whole
-    episode lifecycle — which is why Exit was never pressed and the map never
-    cleared. Checking the source is crude, but the alternative is a phone.
+    Its first version omitted the whole episode lifecycle -- Exit was never
+    pressed and the map never cleared. The per-match rebuild now lives in
+    `rl.pipeline.LiveAgent.new_match`, so that is tested for real; that the
+    runner calls it (and drives the menus) is still checked from its source,
+    because the alternative is a phone.
     """
     import pathlib
+    from rl.pipeline import LiveAgent
+
+    agent = LiveAgent("shelly", tick_seconds=0.1)
+    agent.planner.world.set_geometry((0, 0, 1920, 1080), (48, 27))
+    agent.planner.world.occ_p[:] = 0.9          # a previous match's walls
+    before = {k: getattr(agent, k) for k in
+              ("planner", "camera", "profiles", "perception", "tracker", "brain",
+               "combat", "calc", "killer")}
+    agent.new_match()
+    for k, old in before.items():
+        assert getattr(agent, k) is not old, f"{k} survived into the next match"
+    assert not agent.planner.world.ready() or not agent.planner.world.occupancy.any()
+
     src = (pathlib.Path(__file__).resolve().parent.parent
            / "webui" / "runner.py").read_text()
     assert "navigate_to_match" in src, "nothing ever presses Exit / Play Again"
-    assert "def new_match" in src, "no per-match state rebuild"
-    for piece in ("WaypointPlanner(", "CameraTracker(", "ProfileSelector(",
-                  "LivePerception("):
-        assert src.count(piece) >= 1, f"{piece} is never rebuilt per match"
+    assert src.count("agent.new_match()") >= 2, "no per-match state rebuild"
     assert "state.match_over or not state.is_alive" in src, \
         "no end-of-match trigger"
 

@@ -38,13 +38,8 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import cv2  # noqa: E402
-from perception.liveLoop import AdbScreencapSource, LivePerception  # noqa: E402
+from perception.liveLoop import AdbScreencapSource  # noqa: E402
 from perception.getSuper import SUPER_ROI  # noqa: E402
-from perception.getTerrain import find_terrain, play_rect, ProfileSelector, GRID_W, GRID_H  # noqa: E402
-from perception.getGas import gas_info, player_anchor  # noqa: E402
-from rl.state import adapt_live_state  # noqa: E402
-from rl.rewards import RewardCalculator, RewardConfig  # noqa: E402
-from rl.kills import KillAttributor  # noqa: E402
 from rl.actions import Controls  # noqa: E402
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -154,21 +149,22 @@ def main() -> None:
         ex.close()
         time.sleep(1.0)
 
-    perception = LivePerception()
-    calc = RewardCalculator(RewardConfig())
-    calc.reset()
-    killer = KillAttributor()
-    killer.reset()
-
+    # The same frame -> decision stack the web UI runs (rl/pipeline.py); here
+    # its decisions are only printed and traced, never sent.
+    from rl.pipeline import LiveAgent
     tracer = _make_tracer(args) if args.trace else None
-    planner = camera = profiles = policy = None
-    if tracer is not None:
-        from rl.path_planner import WaypointPlanner
-        from rl.camera_tracker import CameraTracker
-        planner, camera, profiles = WaypointPlanner(), CameraTracker(), ProfileSelector()
-        use_brain = args.brain == "tactical" or (args.brain == "auto" and not args.model)
-        policy = None if use_brain else _load_policy(args.model)
-        _setup_decision(args, use_brain)
+    use_brain = args.brain == "tactical" or (args.brain == "auto" and not args.model)
+    policy = None if use_brain else _load_policy(args.model)
+    factory = None
+    if policy is not None:
+        from rl.checkpoints import PolicyStepper
+        factory = lambda: PolicyStepper(policy, deterministic=False)   # noqa: E731
+    agent = LiveAgent(args.brawler, tick_seconds=1.0 / max(0.1, args.fps),
+                      use_brain=use_brain, policy_stepper_factory=factory,
+                      policy_source="base" if policy is not None else "none")
+    calc = agent.calc
+    print(f"movement: {'tactical brain' if use_brain else 'policy'}"
+          f"{f' ({args.brawler})' if args.brawler else ''}")
 
     started = time.time()
     ticks = 0
@@ -193,11 +189,8 @@ def main() -> None:
                 continue
             misses = 0
 
-            live, _ = perception.tick(frame)
-            kills = killer.update(live)
-            state = adapt_live_state(live, tick=ticks, kills_this_tick=kills,
-                                     frame_size=(frame.shape[1], frame.shape[0]))
-            result = calc.compute(state)
+            tk = agent.step(frame)
+            live, state, result = tk.live, tk.state, tk.reward
             ticks += 1
 
             gs = live["game_state"]["state"]
@@ -207,12 +200,10 @@ def main() -> None:
                   f"super:{(state.super_charge or 0)*100:.0f}% left:{state.players_left} "
                   f"gas:{state.in_gas} enemies:{len(state.enemy_positions)} {bd}", flush=True)
 
-            if tracer is not None:
-                # Every tick, not just traced ones: the tracker and the world
-                # map need every frame to stay registered.
-                _trace_decision(tracer, frame, live, state, result, ticks,
-                                planner, camera, profiles, policy, calc,
-                                write=tracer.due())
+            if tracer is not None and tracer.due():
+                tracer.capture(frame, agent.planner, state, intent=tk.intent,
+                               reward=result, live=live, tick=ticks, force=True)
+                print(f"     why: {agent.explain() or tk.intent.move_label}", flush=True)
 
             if args.save_preview and time.time() - last_preview >= 1.0:
                 _DEBUG.mkdir(parents=True, exist_ok=True)
@@ -260,86 +251,6 @@ def _load_policy(path):
     except Exception as e:
         print(f"could not load {p.name} ({e}) — tracing with random headings")
         return None
-
-
-_DECISION = {}
-
-
-def _setup_decision(args, use_brain: bool) -> None:
-    """Combat, tracker and (optionally) the tactical brain, built once."""
-    from brawlers.abilities import default_abilities
-    from rl.combat import CombatConfig, CombatPolicy
-    from rl.enemy_tracker import EnemyTracker
-    from rl.tactics import TacticalBrain, TacticsConfig
-    ability = default_abilities().get(args.brawler) if args.brawler else None
-    tick = 1.0 / max(0.1, args.fps)
-    combat = CombatPolicy(CombatConfig(tick_seconds=tick), ability=ability)
-    _DECISION.update(
-        combat=combat, tracker=EnemyTracker(),
-        brain=(TacticalBrain(TacticsConfig(tick_seconds=tick), ability=ability,
-                             combat=combat) if use_brain else None))
-    print(f"movement under --trace: {'tactical brain' if use_brain else 'policy'}"
-          f"{f' ({args.brawler})' if args.brawler else ''}")
-
-
-def _trace_decision(tracer, frame, live, state, result, tick,
-                    planner, camera, profiles, policy, calc, write: bool = True):
-    """Run terrain + gas + planner on this frame and write one trace image.
-
-    Mirrors what `rl/env.py` does per step, minus the executor — deliberately,
-    so the trace shows the same decision the trainer would make rather than an
-    approximation of it.
-    """
-    import numpy as np
-    from rl.actions import decode_action, decode_goal
-    from rl.env import encode_observation
-
-    fh, fw = frame.shape[:2]
-    terrain = None
-    if state.player_pos is not None:
-        try:
-            terrain = find_terrain(frame, player_pos=state.player_pos, selector=profiles)
-        except Exception:
-            terrain = None
-    rect = terrain["rect"] if terrain else play_rect(frame)
-    try:
-        gas = gas_info(frame, player_pos=player_anchor(state), grid_rect=rect,
-                       grid_size=(GRID_W, GRID_H))["grid"]
-    except Exception:
-        gas = None
-    if terrain is None and rect is not None:
-        planner.world.set_geometry(rect, (GRID_W, GRID_H))
-
-    dx, dy, ok = camera.update(frame, rect)
-    camera_delta = (dx, dy) if ok else (0.0, 0.0)
-    tracker = _DECISION.get("tracker")
-    if tracker is not None:
-        tracker.update(state, camera_delta)
-    brain = _DECISION.get("brain")
-    goal = brain.decide(state, planner, tracker) if brain is not None else None
-
-    if goal is not None:
-        action = [0, 0]
-    elif policy is not None:
-        max_hp = calc._max_health or calc.config.default_max_health
-        obs = encode_observation(state, max_hp, (fw, fh),
-                                 planner_status=planner.status())
-        action, _ = policy.predict(obs, deterministic=False)
-        action = [int(v) for v in np.asarray(action).ravel()[:2]]
-    else:
-        action = [int(np.random.randint(16)), int(np.random.randint(3))]
-
-    combat = _DECISION["combat"].decide(state, frame_size=(fw, fh), world=planner.world,
-                                        tracker=tracker,
-                                        hint=getattr(goal, "hint", None))
-    kwargs = dict(state=state, frame_size=(fw, fh), planner=planner,
-                  terrain=terrain, camera_delta=camera_delta, gas_grid=gas,
-                  combat=combat)
-    intent = (decode_goal(goal, **kwargs) if goal is not None
-              else decode_action(action, **kwargs))
-    if write:
-        tracer.capture(frame, planner, state, intent=intent, reward=result,
-                       live=live, tick=tick, force=True)
 
 
 if __name__ == "__main__":
