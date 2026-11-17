@@ -1,0 +1,47 @@
+{
+  "_about": "Channels and videos with first-person Brawl Stars gameplay, from docs/DATA_SOURCES.md. Priority 1 = best fit for Solo Showdown imitation. Found by web search on 2026-11-17; handles and IDs were not opened (host blocked) and must be checked. Listing is metadata only: rights to use any video stay with its creator.",
+  "channels": [
+    {"handle": "@SoloSavageBS", "name": "SoloSavage", "priority": 1, "modes": ["soloShowdown"], "note": "Solo Showdown specialist, ~80k trophies"},
+    {"id": "UCGShu88Lh2ZAtXX0qbV9fXA", "name": "CryingMan", "priority": 1, "modes": ["soloShowdown"], "note": "Rank 35 Showdown series 2019-2024; older UI"},
+    {"handle": "@TreborBS", "name": "Trebor", "priority": 1, "modes": ["soloShowdown", "duels", "ladder"], "note": "Top-2 world ladder; Streams tab has long sessions; Spanish ('supervivencia' = Showdown)"},
+    {"id": "UC8DChJqiao86wFT86qj9NtA", "name": "iKaoss11", "priority": 2, "modes": ["soloShowdown", "duels"], "note": "Spanish"},
+    {"handle": "@SnakeThug7", "name": "SnakeThug", "priority": 2, "modes": ["soloShowdown", "ladder"], "note": "German commentary"},
+    {"id": "UCU1Ag9C12YZFKY2HpNJr_3Q", "name": "Hyra", "priority": 2, "modes": ["ladder"], "note": "World-record trophy pusher; may be inactive"},
+    {"handle": "@bentimm1", "name": "BenTimm1", "priority": 3, "modes": ["all"], "note": "Edited, commentary; large volume"},
+    {"handle": "@DrageBS", "name": "Drage", "priority": 2, "modes": ["ranked"], "note": "Long ranked sessions"},
+    {"handle": "@jcbuller", "name": "Jc Buller", "priority": 2, "modes": ["ranked"], "note": "Long ranked sessions, Portuguese"},
+    {"handle": "@SpenLC", "name": "SpenLC", "priority": 2, "modes": ["ranked"], "note": "2019 World Champion"},
+    {"handle": "@bedlamBS", "name": "bedlam", "priority": 2, "modes": ["ranked"], "note": "Ranked streams"},
+    {"handle": "@Symantec-90", "name": "SymantecBS", "priority": 2, "modes": ["ranked"], "note": "2024 World Champion"},
+    {"handle": "@LukiiBrawlStars", "name": "lukii", "priority": 3, "modes": ["ranked"]},
+    {"id": "UCcvJdy945lh9KNQnW2yr_0A", "name": "bobbyBS", "priority": 2, "modes": ["ranked", "scrims"], "note": "Player-POV scrims"},
+    {"handle": "@sitetampo2199", "name": "Sitetampo", "priority": 3, "modes": ["ranked"], "note": "Japanese; daily uploads"},
+    {"handle": "@tensaiofficialBS", "name": "Tensai", "priority": 3, "modes": ["ranked"]},
+    {"handle": "@Jene_Azure", "name": "INS Jene", "priority": 3, "modes": ["ranked"], "note": "Japanese streams"},
+    {"handle": "@RUI_BS", "name": "RUI_BS", "priority": 3, "modes": ["ranked"], "note": "Japanese streams"}
+  ],
+  "playlists": [
+    {"id": "PLik8NpWfN5Arp6njtolq-Ty3e-FeXLrJx", "name": "Solo Showdown Gameplay (low edit)", "priority": 1, "modes": ["soloShowdown"]},
+    {"id": "PLOorSToftMnSI2ayLCMpDZdf-0048J_6t", "name": "Complete Walkthrough (no commentary)", "priority": 3, "modes": ["all"], "note": "Casual skill: perception calibration only"}
+  ],
+  "videos": [
+    {"id": "BNR7ZtxTgvU", "priority": 1, "note": "100,000 trophies in Solo Showdown only; uploader unidentified"},
+    {"id": "UDftvI7MmtE", "priority": 1, "note": "Live: pushing to 95,200, Solo Showdown"},
+    {"id": "9h2PkCO3uuY", "priority": 1, "note": "Live: 83,000 push, Solo Showdown"},
+    {"id": "EbeGMmpM4UE", "priority": 1, "note": "Prestige 2 Surge, Solo Showdown, no teaming (2026 UI)"},
+    {"id": "uBs93E1jCvA", "priority": 1, "note": "Every brawler Prestige 2, no teaming"},
+    {"id": "6_aBKSKTBHs", "priority": 1, "note": "Willow Prestige 2, Solo Showdown"},
+    {"id": "_fkliYrOn-E", "priority": 1, "note": "5 Prestige 3 brawlers, Solo Showdown"},
+    {"id": "mA60j4jXrLc", "priority": 1, "note": "Prestige by only getting first place"},
+    {"id": "XRQfKFKuWYw", "priority": 1, "note": "Bull prestige, Solo Showdown"},
+    {"id": "P2qUvVXqbiI", "priority": 2, "note": "Rank 35 Leon, Solo Showdown full gameplay"},
+    {"id": "GJEnvxBt_ww", "priority": 2, "note": "Rank 35 Max, Solo Showdown"},
+    {"id": "oZLZx2HMRic", "priority": 2, "note": "Rank 30 Brock 1000+, Solo Showdown full gameplay"},
+    {"id": "WGUGRbfsuB8", "priority": 2, "note": "Piper rank 35, series 1/85"},
+    {"id": "Zqe70-_AIdI", "priority": 2, "note": "Kit Solo Showdown 2025 max-tier push"},
+    {"id": "oK7g6P7DtoM", "priority": 2, "note": "Rank 35 Leon, Duo Showdown full gameplay"},
+    {"id": "pACqmhXuXuI", "priority": 2, "note": "Trebor: 200,000 trophies in Duels"},
+    {"id": "aWDFPORlYUM", "priority": 2, "note": "Season 52 ranked, Road to Legendary (no-commentary series)"},
+    {"id": "aML3pusVLwk", "priority": 3, "note": "Title says FREE TO USE; check the description's licence wording"}
+  ]
+}

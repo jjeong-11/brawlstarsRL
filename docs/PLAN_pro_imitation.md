@@ -96,6 +96,8 @@ pro footage --(camera-motion IDM, HUD reads, "show taps")--> (state features, ac
 | 1b | `rl/scrcpy_video.py`: scrcpy H.264 capture (PyAV), latest-frame only; target < 80 ms frame age | **done; untested on a phone** |
 | 1c | `sim/imitate.py`: decision-layer imitation from movement alone, validated in the sim | **done: exit criterion met** |
 | 1d | Learned detector (YOLO to ONNX) trained on frames auto-labelled by the current perception, then corrected by hand; replaces the HSV profiles | next |
+| 1e | `rl/pipeline.py` `LiveAgent`: one frame-to-decision loop for the web UI, `watch_live`, the footage fitter and training; per-stage timing; settings rescaled to seconds (`rl/timebase.py`) | **done** |
+| 1f | Data acquisition: battle-log crawler, footage manifest, map coverage (`docs/DATA_SOURCES.md`) | **tools done; needs keys on your machine** |
 
 **Exit criteria:**
 - Labeller: movement direction within 30° on ≥ 90% of moving frames, checked
@@ -162,6 +164,35 @@ scrcpy video) and a tight loop ahead of detector accuracy (1d), and it is
 the measurable version of "CV is slow". Measure the loop's real frame age
 and latency on the phone first (handoff section 1).
 
+#### Real-time loop (1e)
+
+Every caller now runs the same `LiveAgent.step(frame)`: perception, game
+state, terrain, gas, camera registration, enemy tracks, brain, combat and
+route. `scripts/bench_realtime.py` replays frames at a target rate; the web
+UI shows the same per-stage percentiles live.
+
+| Setting (4 CPU cores, 2424x1080 frames) | p50 | p95 | Budget |
+|---|---|---|---|
+| 10 decisions/s (web UI default) | 22 ms | 34 ms | 100 ms |
+| 20 decisions/s | ~22 ms | ~40 ms | 50 ms |
+| 30 decisions/s | - | 34 ms | 33 ms (just over) |
+
+Perception is about 60% of the tick (OCR runs once a second on a worker
+thread); the gas scan runs every 0.4 s and terrain every tick. The decision
+side (brain + combat + route) is under 10 ms at p95. So the computer is not
+the bottleneck at 10-20 Hz; what is left is capture age and touch latency on
+the phone, which only the phone can measure (handoff section 1).
+
+Two fixes came out of this:
+- **Tick-rate independence.** Settings counted in ticks (commit times, stuck
+  detection, memory of unseen enemies, super cooldown) lasted half as long at
+  20 Hz as at 10 Hz. `rl/timebase.py` rescales them so they last the same
+  number of seconds at any rate; at 0.1 s it is the identity, so simulator
+  results are unchanged (32-seed check bit-identical).
+- **Phantom gas before the first anchor.** A gas scan before the player was
+  located wrote phantom gas next to the player into the world map. Scans now
+  wait for an anchor and reuse the last one when a frame misses it.
+
 #### Where the defaults lose places, and new behaviours tried against it
 
 Loss breakdown (320 seeds, defaults, mean place 3.36):
@@ -200,6 +231,22 @@ information and no latency, places **5.03** in our seat. Our bot places
 - pro-fitted decisions (Phase 2);
 - the phone-side speed fixes, which the noise/latency sweep says are worth
   up to 0.5 place.
+
+### Next steps, in order
+
+1. **Phone checks** (handoff section 1): capture frame age with scrcpy video,
+   touch latency, and the web UI's latency panel at 10 decisions/s.
+   Exit: frame age ≤ 80 ms, loop p95 ≤ 50 ms.
+2. **Data on your machine** (`docs/DATA_SOURCES.md`, handoff section 6):
+   - crawl Solo Showdown battle logs for a few thousand high-trophy players,
+     to get the real mean place per brawler and map at 800+ trophies;
+   - build the footage manifest and ask the top Solo Showdown creators for
+     raw recordings; record our own games;
+   - run map coverage and add renders for this season's missing maps.
+3. **Perceive and fit** the first real footage (Phase 2 commands), then
+   `sim.calibration` -> calibrated sim -> re-evaluate the defaults there.
+4. **Detector (1d)**, only if real footage shows perception misses that
+   matter: auto-labels from our perception, corrected by hand.
 
 ### Phase 2: learn from the pros
 - Run the labeller and perception over the footage to get (features, action)

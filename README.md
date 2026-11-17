@@ -24,10 +24,15 @@ projectv2/
 │   ├── getGameState.py      match_end / loading / in_match + brawlers-left + rank
 │   ├── digitReader.py       fast template digit OCR (+ digit_*.npz data)
 │   ├── username_classifier.py  (+ username_classifier_weights.json)
-│   ├── callTools.py         one-frame debug harness
 │   └── liveLoop.py          LivePerception: runs the whole stack per tick,
 │                            smooths noise, and emits one "live state" dict
-├── rl/                  Reinforcement-learning layer  (NEW)
+├── rl/                  Decision layer
+│   ├── pipeline.py          LiveAgent: frame -> decision, the ONE live loop  ← start here
+│   ├── timebase.py          tick-counted settings rescaled to seconds per loop rate
+│   ├── tactics.py           TacticalBrain: utility-scored goals with reasons (xAI)
+│   ├── enemy_tracker.py     tracks enemies through misses and camera motion
+│   ├── scrcpy_control.py    held multi-touch over scrcpy (recommended control)
+│   ├── scrcpy_video.py      scrcpy H.264 capture, latest frame only
 │   ├── state.py             GameState + adapt_live_state(live dict -> GameState)
 │   ├── rewards.py           RewardConfig + RewardCalculator  ← the learning signal
 │   ├── kills.py             KillAttributor (credits the agent's knockouts)
@@ -57,10 +62,15 @@ projectv2/
 │   ├── run_prototype.py     perception -> reward loop on real footage  ← the prototype
 │   ├── train_rl.py          PPO training
 │   ├── watch_live.py        watch rewards + decisions without sending input
+│   ├── bench_realtime.py    per-stage latency of the live loop at a target rate
 │   ├── measure_latency.py   how many ticks until an action reaches the screen
 │   └── check_perception.py  PRE-FLIGHT: per-stage perception health check
-├── docs/BRAWLERS.md     GENERATED reference: every brawler's class, range,
-│                        aim mode and where each number came from
+├── sim/                 10-player Showdown simulator, paired-seed evaluation,
+│                        imitation fitting, league self-play
+├── docs/                PLAN_pro_imitation.md (roadmap + results),
+│                        HANDOFF_local_agent.md (what needs the phone),
+│                        DATA_SOURCES.md (footage, API data, CV sets, rules),
+│                        BRAWLERS.md (GENERATED brawler reference)
 ├── tests/               pytest suite: `python -m pytest`
 │   ├── test_planner.py      planner + world map + gas, in a scrolling sim
 │   ├── test_rewards.py      reward engine
@@ -71,7 +81,11 @@ projectv2/
 │                        sync_brawlers.py       = roster + portraits
 │                        sync_brawler_abilities.py = exact ranges from the
 │                                                    game's own CSVs
-│                        dump_brawler_reference.py = docs/BRAWLERS.md)
+│                        dump_brawler_reference.py = docs/BRAWLERS.md
+│                        fit_from_footage.py    = Phase 2 fit + sim calibration
+│                        crawl_battlelogs.py    = Solo Showdown outcomes (API)
+│                        list_footage.py        = footage manifest (metadata)
+│                        fetch_game_data.py     = maps, rotation, map coverage)
 ├── media/               fixtures/ (calibration screenshots) showdownmaps/
 │                        testphotos/ crops/ gasphotos/
 ├── training_data/       username-classifier dataset
@@ -85,7 +99,18 @@ packages resolve no matter where you run them from.
 
 ## How it all connects
 
-One game tick flows top to bottom:
+Live, every caller (web UI, `watch_live`, the footage fitter) runs the same
+`rl/pipeline.py`:
+
+```python
+agent = LiveAgent("shelly", tick_seconds=0.1)
+tick = agent.step(frame)     # perception -> terrain/gas -> camera + tracks -> brain -> combat -> route
+executor.send(tick.intent)
+agent.latency()              # per-stage p50/p95 ms; 22/34 ms total at 10 Hz on 4 cores
+```
+
+The RL training loop below wraps the same pieces in a Gymnasium env. One game
+tick flows top to bottom:
 
 ```
    screen frame
@@ -878,7 +903,7 @@ capture costs nothing and compute looks like the whole story. On a phone
 
 | dominant row | what to do |
 |---|---|
-| `act` | swipes are queueing — see below. Use `--sendevent`, which holds the touch instead of re-swiping |
+| `act` | swipes are queueing — see below. Use `--scrcpy`, which holds the touch instead of re-swiping (`--sendevent` does too, but recent Android blocks it; see docs/ANDROID_CONTROL.md) |
 | `pace` | the loop is idle-waiting, so lower `--tick-seconds` |
 | `perceive` | raise the intervals in `liveLoop.STAGE_INTERVALS` |
 | `capture` | change transport — `--scrcpy` is the only flag that swaps the capture source |
@@ -904,9 +929,11 @@ after the policy picked it, so the reward is attributed to the wrong action.
 
 `Controls.tuned_for_tick()` now clamps `hold_ms` to the tick budget
 automatically and prints a note when it does, so swipes tile at a ~100% duty
-cycle instead of queueing. **`--sendevent` avoids the problem entirely** — it
+cycle instead of queueing. **`--scrcpy` avoids the problem entirely** — it
 presses the joystick once and only MOVEs it to redirect, so movement costs
-nothing per step and is genuinely continuous rather than re-swiped.
+nothing per step and is genuinely continuous rather than re-swiped. It also
+swaps capture to scrcpy's video stream. (`--sendevent` works the same way
+but needs a writable `/dev/input`, which recent Android no longer allows.)
 
 `--tick-seconds` is a **deadline, not a delay**: `_pace()` waits until the next
 tick is due rather than sleeping a fixed amount on top of the work, so the

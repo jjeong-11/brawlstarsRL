@@ -70,3 +70,8 @@ webui/static/icons/
 media/crops/
 training_data/
 media/testphotos/
+
+# Downloaded / crawled data (tools/crawl_battlelogs.py, fetch_game_data.py,
+# list_footage.py). Contains other players' tags and Supercell art: private,
+# never committed. See docs/DATA_SOURCES.md.
+datasets/

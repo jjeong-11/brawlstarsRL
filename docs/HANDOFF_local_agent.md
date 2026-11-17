@@ -63,8 +63,11 @@ Set these in the web UI:
 - Options > Control backend: **scrcpy**.
 - Tick **Record raw frames for debugging**.
 
-Also set Options > Ticks per second to **8**, then check the web UI's fps
-readout keeps up. In the simulator, stale information and lag cost up to
+Leave Options > Decisions per second at **10** (the default), then check
+the web UI's latency panel: total p95 should stay under 100 ms and "old
+frames" near 0%. `python3 scripts/bench_realtime.py --video <recording>`
+gives the same numbers offline (22 ms p50 / 34 ms p95 on a 4-core cloud
+machine). In the simulator, stale information and lag cost up to
 half a place while perception noise cost nothing measurable (plan,
 "Noise and latency sweep"). With scrcpy capture and the throttled live view
 (`view_fps`), the loop should manage more than the old default of 4.
@@ -161,6 +164,36 @@ Not built yet (next steps):
 | Footage labeller (synthetic) | median heading error 1.5°, 100% within 30° |
 | Imitation fit (sim, movement only) | fitted 3.73 vs demonstrator 3.71 mean place |
 | scrcpy control / video | pass against fake servers; **unverified on a phone** |
+| Live loop (`rl/pipeline.py`), 10 decisions/s | 22 ms p50, 34 ms p95 per tick on 4 cores; phone-side latency unmeasured |
 | Phantom gas fix | 1 -> 0 false gas cells on a clean frame; **unverified on a phone** |
 | League self-play v2 (paired) | champion +0.14 ± 0.15 vs bots, +0.44 ± 0.33 head-to-head: **no gain**; the defaults are a local optimum for these 6 settings |
 | League self-play (first run) | champion 3.42 vs defaults 3.36 against bots (320 seeds); head-to-head -0.17 ± 0.36: **no gain, not adopted** |
+
+---
+
+## 6. Data acquisition (needs your machine: the cloud session cannot reach these hosts)
+
+Sources, terms and caveats: `docs/DATA_SOURCES.md`. Output goes to
+`datasets/` (git-ignored; it holds other players' tags and Supercell art).
+
+```bash
+# a) Solo Showdown outcomes from the official API. Create the key at
+#    developer.brawlstars.com for THIS machine's public IP.
+export BRAWLSTARS_API_KEY=...
+python3 tools/crawl_battlelogs.py crawl --seed-rankings global --max-requests 2000
+python3 tools/crawl_battlelogs.py crawl --max-requests 5000      # keep going; resumable
+python3 tools/crawl_battlelogs.py stats --min-trophies 800
+python3 tools/crawl_battlelogs.py stats --by map --min-trophies 800 --json > showdown_stats.json
+
+# b) Footage manifest: metadata only, nothing downloaded.
+export YOUTUBE_API_KEY=...
+python3 tools/list_footage.py --modes soloShowdown,duoShowdown --min-minutes 3
+
+# c) Which of this season's Showdown maps the localiser has no layout for.
+python3 tools/fetch_game_data.py coverage
+python3 tools/fetch_game_data.py maps --renders
+```
+
+Commit `showdown_stats.json` (aggregates only) and add the coverage result
+to the table in section 5. Use the manifest to contact creators for raw
+recordings; do not download their videos.
